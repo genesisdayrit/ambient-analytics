@@ -3,7 +3,7 @@ import Link from "next/link";
 const experiments = [
   { id: 1, title: "connect to db", href: "/experiments/connect-to-db" },
   { id: 2, title: "chat with table", href: "/experiments/natural-language-to-sql" },
-  { id: 3, title: "SQL to Visual" },
+  { id: 3, title: "chart.js generation", href: "/experiments/chart-js-generation" },
 ];
 
 export default function Experiments() {
