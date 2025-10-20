@@ -121,10 +121,51 @@ Return ONLY the SQL query.`;
       await client.end();
     }
 
+    // Generate interpretation if we have results
+    let interpretation = null;
+    if (executionResult && !executionError) {
+      try {
+        const interpretationPrompt = `You are a helpful data analyst assistant. Based on the following query and results, provide a clear, concise interpretation and summary.
+
+User's Question: "${naturalLanguageQuery}"
+
+SQL Query Executed:
+${cleanedSQL}
+
+Results (${executionResult.rowCount} rows):
+${JSON.stringify(executionResult.rows.slice(0, 10), null, 2)}
+${executionResult.rowCount > 10 ? `\n(Showing first 10 of ${executionResult.rowCount} total rows)` : ''}
+
+Provide a natural language summary and interpretation of these results. Focus on:
+1. Directly answering the user's question
+2. Key insights from the data
+3. Any notable patterns or trends
+4. Keep it concise and conversational
+
+Response:`;
+
+        const interpretationCompletion = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            { role: "system", content: "You are a helpful data analyst assistant that interprets query results in clear, natural language." },
+            { role: "user", content: interpretationPrompt }
+          ],
+          temperature: 0.7,
+          max_tokens: 500,
+        });
+
+        interpretation = interpretationCompletion.choices[0]?.message?.content?.trim() || null;
+      } catch (interpretError) {
+        console.error("Error generating interpretation:", interpretError);
+        // Don't fail the whole request if interpretation fails
+      }
+    }
+
     return NextResponse.json({ 
       sql: cleanedSQL,
       result: executionResult,
-      error: executionError
+      error: executionError,
+      interpretation
     });
   } catch (error) {
     console.error("Error generating SQL:", error);

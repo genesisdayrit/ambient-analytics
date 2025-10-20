@@ -38,6 +38,7 @@ export default function NaturalLanguageToSQL() {
   const [naturalLanguageQuery, setNaturalLanguageQuery] = useState("");
   const [generatedSQL, setGeneratedSQL] = useState("");
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null);
+  const [interpretation, setInterpretation] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingTables, setLoadingTables] = useState(false);
   const [loadingColumns, setLoadingColumns] = useState(false);
@@ -206,6 +207,7 @@ export default function NaturalLanguageToSQL() {
     setSqlError("");
     setExecutionError("");
     setQueryResult(null);
+    setInterpretation("");
     
     try {
       const response = await fetch("/api/generate-sql", {
@@ -234,6 +236,7 @@ export default function NaturalLanguageToSQL() {
         setExecutionError(data.error);
       } else if (data.result) {
         setQueryResult(data.result);
+        setInterpretation(data.interpretation || "");
       }
     } catch (err) {
       setSqlError("Failed to generate SQL");
@@ -549,6 +552,15 @@ export default function NaturalLanguageToSQL() {
                 ) : (
                   <p className="text-gray-600 dark:text-gray-400">Query executed successfully but returned no rows.</p>
                 )}
+              </div>
+            )}
+
+            {interpretation && (
+              <div className="mt-6">
+                <h3 className="text-xl mb-2">LLM Interpretation</h3>
+                <div className="border border-blue-300 dark:border-blue-700 rounded-lg p-4 bg-blue-50 dark:bg-blue-950">
+                  <p className="text-sm whitespace-pre-wrap leading-relaxed">{interpretation}</p>
+                </div>
               </div>
             )}
           </div>
