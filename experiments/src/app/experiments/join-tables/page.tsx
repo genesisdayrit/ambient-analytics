@@ -236,7 +236,7 @@ export default function JoinTables() {
     <div className="min-h-screen">
       <div className="p-6">
         <div className="max-w-7xl mx-auto">
-          <h1 className="text-4xl mb-8">join tables</h1>
+          <h1 className="text-4xl mb-8">ERD generator</h1>
         
           <div className="mb-6">
             <label htmlFor="env-selector" className="block text-sm mb-2">
