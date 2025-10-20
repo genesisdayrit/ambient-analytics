@@ -4,6 +4,7 @@ const experiments = [
   { id: 1, title: "connect to db", href: "/experiments/connect-to-db" },
   { id: 2, title: "chat with table", href: "/experiments/natural-language-to-sql" },
   { id: 3, title: "chart.js generation", href: "/experiments/chart-js-generation" },
+  { id: 4, title: "query generation", href: "/experiments/query-generation" },
 ];
 
 export default function Experiments() {
