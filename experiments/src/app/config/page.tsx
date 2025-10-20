@@ -1,4 +1,3 @@
-import Link from "next/link";
 import ConfigForm from "./config-form";
 
 export default function Config() {
@@ -6,19 +5,6 @@ export default function Config() {
 
   return (
     <div className="min-h-screen">
-      <nav className="flex items-center justify-between p-6">
-        <Link href="/" className="text-lg hover:opacity-70 transition-opacity">
-          ambient analytics
-        </Link>
-        <div className="flex gap-6">
-          <Link href="/experiments" className="text-lg hover:opacity-70 transition-opacity">
-            experiments
-          </Link>
-          <Link href="/config" className="text-lg hover:opacity-70 transition-opacity">
-            config
-          </Link>
-        </div>
-      </nav>
       <div className="p-6 max-w-4xl mx-auto">
         <h1 className="text-4xl mb-8">config</h1>
         

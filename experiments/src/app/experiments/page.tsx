@@ -9,19 +9,6 @@ const experiments = [
 export default function Experiments() {
   return (
     <div className="min-h-screen">
-      <nav className="flex items-center justify-between p-6">
-        <Link href="/" className="text-lg hover:opacity-70 transition-opacity">
-          ambient analytics
-        </Link>
-        <div className="flex gap-6">
-          <Link href="/experiments" className="text-lg hover:opacity-70 transition-opacity">
-            experiments
-          </Link>
-          <Link href="/config" className="text-lg hover:opacity-70 transition-opacity">
-            config
-          </Link>
-        </div>
-      </nav>
       <div className="p-6">
         <h1 className="text-4xl mb-8">experiments</h1>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 max-w-7xl">

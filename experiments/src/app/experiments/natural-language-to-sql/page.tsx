@@ -384,19 +384,6 @@ export default function NaturalLanguageToSQL() {
 
   return (
     <div className="min-h-screen">
-      <nav className="flex items-center justify-between p-6">
-        <Link href="/" className="text-lg hover:opacity-70 transition-opacity">
-          ambient analytics
-        </Link>
-        <div className="flex gap-6">
-          <Link href="/experiments" className="text-lg hover:opacity-70 transition-opacity">
-            experiments
-          </Link>
-          <Link href="/config" className="text-lg hover:opacity-70 transition-opacity">
-            config
-          </Link>
-        </div>
-      </nav>
       <div className="p-6">
         <div className="max-w-7xl mx-auto">
           <h1 className="text-4xl mb-8">chat with table</h1>

@@ -182,19 +182,6 @@ export default function ConnectToDB() {
 
   return (
     <div className="min-h-screen">
-      <nav className="flex items-center justify-between p-6">
-        <Link href="/" className="text-lg hover:opacity-70 transition-opacity">
-          ambient analytics
-        </Link>
-        <div className="flex gap-6">
-          <Link href="/experiments" className="text-lg hover:opacity-70 transition-opacity">
-            experiments
-          </Link>
-          <Link href="/config" className="text-lg hover:opacity-70 transition-opacity">
-            config
-          </Link>
-        </div>
-      </nav>
       <div className="p-6 flex gap-6">
         <div className="flex-1 min-w-0">
           <h1 className="text-4xl mb-8">connect to db</h1>
