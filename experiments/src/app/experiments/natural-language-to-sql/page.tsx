@@ -44,6 +44,8 @@ export default function NaturalLanguageToSQL() {
   const [loadingColumns, setLoadingColumns] = useState(false);
   const [loadingSample, setLoadingSample] = useState(false);
   const [generatingSQL, setGeneratingSQL] = useState(false);
+  const [executingSQL, setExecutingSQL] = useState(false);
+  const [generatingInterpretation, setGeneratingInterpretation] = useState(false);
   const [error, setError] = useState("");
   const [tablesError, setTablesError] = useState("");
   const [columnsError, setColumnsError] = useState("");
@@ -203,11 +205,16 @@ export default function NaturalLanguageToSQL() {
       return;
     }
 
-    setGeneratingSQL(true);
+    // Reset states
     setSqlError("");
     setExecutionError("");
     setQueryResult(null);
     setInterpretation("");
+    setGeneratedSQL("");
+    
+    // Step 1: Generate SQL
+    setGeneratingSQL(true);
+    let sql = "";
     
     try {
       const response = await fetch("/api/generate-sql", {
@@ -230,19 +237,85 @@ export default function NaturalLanguageToSQL() {
       }
 
       const data = await response.json();
-      setGeneratedSQL(data.sql || "");
-      
-      if (data.error) {
-        setExecutionError(data.error);
-      } else if (data.result) {
-        setQueryResult(data.result);
-        setInterpretation(data.interpretation || "");
-      }
+      sql = data.sql || "";
+      setGeneratedSQL(sql);
     } catch (err) {
       setSqlError("Failed to generate SQL");
       console.error(err);
-    } finally {
       setGeneratingSQL(false);
+      return;
+    }
+    
+    setGeneratingSQL(false);
+
+    // Step 2: Execute SQL
+    setExecutingSQL(true);
+    let result = null;
+    
+    try {
+      const response = await fetch("/api/execute-sql", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          env: selectedEnv,
+          sql,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to execute SQL");
+      }
+
+      const data = await response.json();
+      
+      if (data.error) {
+        setExecutionError(data.error);
+        setExecutingSQL(false);
+        return;
+      }
+      
+      result = data.result;
+      setQueryResult(result);
+    } catch (err) {
+      setExecutionError("Failed to execute SQL");
+      console.error(err);
+      setExecutingSQL(false);
+      return;
+    }
+    
+    setExecutingSQL(false);
+
+    // Step 3: Generate interpretation
+    if (result) {
+      setGeneratingInterpretation(true);
+      
+      try {
+        const response = await fetch("/api/interpret-results", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            naturalLanguageQuery,
+            sql,
+            result,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to generate interpretation");
+        }
+
+        const data = await response.json();
+        setInterpretation(data.interpretation || "");
+      } catch (err) {
+        console.error("Failed to generate interpretation:", err);
+        // Don't show error to user, interpretation is optional
+      } finally {
+        setGeneratingInterpretation(false);
+      }
     }
   };
 
@@ -487,80 +560,107 @@ export default function NaturalLanguageToSQL() {
             
             <button
               onClick={generateSQL}
-              disabled={!naturalLanguageQuery.trim() || generatingSQL}
+              disabled={!naturalLanguageQuery.trim() || generatingSQL || executingSQL || generatingInterpretation}
               className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
             >
-              {generatingSQL ? "Generating..." : "Generate SQL"}
+              {generatingSQL ? "Generating SQL..." : 
+               executingSQL ? "Executing Query..." : 
+               generatingInterpretation ? "Generating Interpretation..." : 
+               "Generate SQL"}
             </button>
 
             {sqlError && (
               <p className="text-red-600 dark:text-red-400 mt-4">{sqlError}</p>
             )}
 
-            {generatedSQL && (
+            {(generatingSQL || generatedSQL) && (
               <div className="mt-6">
                 <h3 className="text-xl mb-2">Generated SQL</h3>
-                <div className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-900">
-                  <pre className="text-sm font-mono whitespace-pre-wrap">{generatedSQL}</pre>
-                </div>
-              </div>
-            )}
-
-            {executionError && (
-              <div className="mt-6">
-                <h3 className="text-xl mb-2 text-red-600 dark:text-red-400">Execution Error</h3>
-                <div className="border border-red-300 dark:border-red-700 rounded-lg p-4 bg-red-50 dark:bg-red-950">
-                  <pre className="text-sm font-mono whitespace-pre-wrap text-red-600 dark:text-red-400">{executionError}</pre>
-                </div>
-              </div>
-            )}
-
-            {queryResult && (
-              <div className="mt-6">
-                <h3 className="text-xl mb-2">Query Results ({queryResult.rowCount} rows)</h3>
-                {queryResult.rows.length > 0 ? (
-                  <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-auto max-h-96">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
-                        <tr>
-                          {queryResult.columns.map((col) => (
-                            <th key={col} className="px-3 py-2 text-left text-xs font-medium whitespace-nowrap">
-                              {col}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                        {queryResult.rows.map((row, idx) => (
-                          <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-800">
-                            {queryResult.columns.map((col) => (
-                              <td key={col} className="px-3 py-2 text-xs font-mono whitespace-nowrap">
-                                {row[col] === null ? (
-                                  <span className="text-gray-400 italic">null</span>
-                                ) : typeof row[col] === 'object' ? (
-                                  JSON.stringify(row[col])
-                                ) : (
-                                  String(row[col])
-                                )}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                {generatingSQL ? (
+                  <div className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-900">
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                      <span className="text-sm text-gray-600 dark:text-gray-400">Generating SQL query...</span>
+                    </div>
                   </div>
                 ) : (
-                  <p className="text-gray-600 dark:text-gray-400">Query executed successfully but returned no rows.</p>
+                  <div className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-900">
+                    <pre className="text-sm font-mono whitespace-pre-wrap">{generatedSQL}</pre>
+                  </div>
                 )}
               </div>
             )}
 
-            {interpretation && (
+            {(executingSQL || executionError || queryResult) && (
+              <div className="mt-6">
+                <h3 className="text-xl mb-2">Query Results</h3>
+                {executingSQL ? (
+                  <div className="border border-gray-300 dark:border-gray-700 rounded-lg p-4">
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                      <span className="text-sm text-gray-600 dark:text-gray-400">Executing query...</span>
+                    </div>
+                  </div>
+                ) : executionError ? (
+                  <div className="border border-red-300 dark:border-red-700 rounded-lg p-4 bg-red-50 dark:bg-red-950">
+                    <p className="text-sm font-semibold text-red-600 dark:text-red-400 mb-2">Execution Error</p>
+                    <pre className="text-sm font-mono whitespace-pre-wrap text-red-600 dark:text-red-400">{executionError}</pre>
+                  </div>
+                ) : queryResult && queryResult.rows.length > 0 ? (
+                  <>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">{queryResult.rowCount} rows</p>
+                    <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-auto max-h-96">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
+                          <tr>
+                            {queryResult.columns.map((col) => (
+                              <th key={col} className="px-3 py-2 text-left text-xs font-medium whitespace-nowrap">
+                                {col}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                          {queryResult.rows.map((row, idx) => (
+                            <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-800">
+                              {queryResult.columns.map((col) => (
+                                <td key={col} className="px-3 py-2 text-xs font-mono whitespace-nowrap">
+                                  {row[col] === null ? (
+                                    <span className="text-gray-400 italic">null</span>
+                                  ) : typeof row[col] === 'object' ? (
+                                    JSON.stringify(row[col])
+                                  ) : (
+                                    String(row[col])
+                                  )}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                ) : queryResult && queryResult.rows.length === 0 ? (
+                  <p className="text-gray-600 dark:text-gray-400">Query executed successfully but returned no rows.</p>
+                ) : null}
+              </div>
+            )}
+
+            {(generatingInterpretation || interpretation) && (
               <div className="mt-6">
                 <h3 className="text-xl mb-2">LLM Interpretation</h3>
-                <div className="border border-blue-300 dark:border-blue-700 rounded-lg p-4 bg-blue-50 dark:bg-blue-950">
-                  <p className="text-sm whitespace-pre-wrap leading-relaxed">{interpretation}</p>
-                </div>
+                {generatingInterpretation ? (
+                  <div className="border border-blue-300 dark:border-blue-700 rounded-lg p-4 bg-blue-50 dark:bg-blue-950">
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                      <span className="text-sm text-gray-600 dark:text-gray-400">Generating interpretation...</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="border border-blue-300 dark:border-blue-700 rounded-lg p-4 bg-blue-50 dark:bg-blue-950">
+                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{interpretation}</p>
+                  </div>
+                )}
               </div>
             )}
           </div>
