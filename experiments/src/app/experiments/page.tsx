@@ -2,7 +2,7 @@ import Link from "next/link";
 
 const experiments = [
   { id: 1, title: "connect to db", href: "/experiments/connect-to-db" },
-  { id: 2, title: "natural language to sql", href: "/experiments/natural-language-to-sql" },
+  { id: 2, title: "chat with table", href: "/experiments/natural-language-to-sql" },
   { id: 3, title: "SQL to Visual" },
 ];
 

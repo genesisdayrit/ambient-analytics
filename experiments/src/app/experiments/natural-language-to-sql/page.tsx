@@ -258,9 +258,9 @@ export default function NaturalLanguageToSQL() {
           </Link>
         </div>
       </nav>
-      <div className="p-6 flex gap-6">
-        <div className="flex-1 min-w-0">
-          <h1 className="text-4xl mb-8">natural language to sql</h1>
+      <div className="p-6">
+        <div className="max-w-7xl mx-auto">
+          <h1 className="text-4xl mb-8">chat with table</h1>
           
           <div className="mb-6">
             <label htmlFor="env-selector" className="block text-sm mb-2">
@@ -362,53 +362,110 @@ export default function NaturalLanguageToSQL() {
 
         {selectedTable && (
           <div className="mt-8">
-            <h2 className="text-2xl mb-4">Columns in {selectedTable}</h2>
+            <h2 className="text-2xl mb-4">Table Schema & Sample Data</h2>
             
-            {loadingColumns && (
-              <p className="text-gray-600 dark:text-gray-400">Loading columns...</p>
-            )}
-            
-            {columnsError && (
-              <p className="text-red-600 dark:text-red-400">{columnsError}</p>
-            )}
-            
-            {!loadingColumns && !columnsError && columns.length > 0 && (
-              <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
-                <table className="w-full">
-                  <thead className="bg-gray-50 dark:bg-gray-800">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-sm font-medium">Column Name</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium">Data Type</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium">Nullable</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium">Default</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                    {columns.map((column) => (
-                      <tr key={column.name} className="hover:bg-gray-50 dark:hover:bg-gray-800">
-                        <td className="px-4 py-3 text-sm font-mono">{column.name}</td>
-                        <td className="px-4 py-3 text-sm">
-                          {column.type}
-                          {column.maxLength && <span className="text-gray-500">({column.maxLength})</span>}
-                        </td>
-                        <td className="px-4 py-3 text-sm">
-                          <span className={column.nullable ? "text-gray-600 dark:text-gray-400" : "text-red-600 dark:text-red-400"}>
-                            {column.nullable ? "YES" : "NO"}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400 font-mono">
-                          {column.default || "-"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Column Information Schema */}
+              <div>
+                <h3 className="text-lg mb-3">Columns in {selectedTable}</h3>
+                
+                {loadingColumns && (
+                  <p className="text-gray-600 dark:text-gray-400">Loading columns...</p>
+                )}
+                
+                {columnsError && (
+                  <p className="text-red-600 dark:text-red-400">{columnsError}</p>
+                )}
+                
+                {!loadingColumns && !columnsError && columns.length > 0 && (
+                  <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 dark:bg-gray-800">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-sm font-medium">Column Name</th>
+                          <th className="px-4 py-3 text-left text-sm font-medium">Data Type</th>
+                          <th className="px-4 py-3 text-left text-sm font-medium">Nullable</th>
+                          <th className="px-4 py-3 text-left text-sm font-medium">Default</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                        {columns.map((column) => (
+                          <tr key={column.name} className="hover:bg-gray-50 dark:hover:bg-gray-800">
+                            <td className="px-4 py-3 text-sm font-mono">{column.name}</td>
+                            <td className="px-4 py-3 text-sm">
+                              {column.type}
+                              {column.maxLength && <span className="text-gray-500">({column.maxLength})</span>}
+                            </td>
+                            <td className="px-4 py-3 text-sm">
+                              <span className={column.nullable ? "text-gray-600 dark:text-gray-400" : "text-red-600 dark:text-red-400"}>
+                                {column.nullable ? "YES" : "NO"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400 font-mono">
+                              {column.default || "-"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                
+                {!loadingColumns && !columnsError && columns.length === 0 && (
+                  <p className="text-gray-600 dark:text-gray-400">No columns found in this table</p>
+                )}
               </div>
-            )}
-            
-            {!loadingColumns && !columnsError && columns.length === 0 && (
-              <p className="text-gray-600 dark:text-gray-400">No columns found in this table</p>
-            )}
+
+              {/* Sample Data */}
+              <div>
+                <h3 className="text-lg mb-3">Sample Data (LIMIT 10)</h3>
+                
+                {loadingSample && (
+                  <p className="text-gray-600 dark:text-gray-400">Loading sample data...</p>
+                )}
+                
+                {sampleError && (
+                  <p className="text-red-600 dark:text-red-400">{sampleError}</p>
+                )}
+                
+                {!loadingSample && !sampleError && sampleData && sampleData.rows.length > 0 && (
+                  <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-auto max-h-[600px]">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
+                        <tr>
+                          {sampleData.columns.map((col) => (
+                            <th key={col} className="px-3 py-2 text-left text-xs font-medium whitespace-nowrap">
+                              {col}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                        {sampleData.rows.map((row, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-800">
+                            {sampleData.columns.map((col) => (
+                              <td key={col} className="px-3 py-2 text-xs font-mono whitespace-nowrap">
+                                {row[col] === null ? (
+                                  <span className="text-gray-400 italic">null</span>
+                                ) : typeof row[col] === 'object' ? (
+                                  JSON.stringify(row[col])
+                                ) : (
+                                  String(row[col])
+                                )}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                
+                {!loadingSample && !sampleError && sampleData && sampleData.rows.length === 0 && (
+                  <p className="text-gray-600 dark:text-gray-400">No data found in this table</p>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -497,57 +554,6 @@ export default function NaturalLanguageToSQL() {
           </div>
         )}
         </div>
-
-        {selectedTable && (
-          <div className="flex-1 min-w-0">
-            <h2 className="text-2xl mb-4 sticky top-0 bg-white dark:bg-black py-2">Sample Data (LIMIT 10)</h2>
-            
-            {loadingSample && (
-              <p className="text-gray-600 dark:text-gray-400">Loading sample data...</p>
-            )}
-            
-            {sampleError && (
-              <p className="text-red-600 dark:text-red-400">{sampleError}</p>
-            )}
-            
-            {!loadingSample && !sampleError && sampleData && sampleData.rows.length > 0 && (
-              <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-auto max-h-[calc(100vh-200px)]">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
-                    <tr>
-                      {sampleData.columns.map((col) => (
-                        <th key={col} className="px-3 py-2 text-left text-xs font-medium whitespace-nowrap">
-                          {col}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                    {sampleData.rows.map((row, idx) => (
-                      <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-800">
-                        {sampleData.columns.map((col) => (
-                          <td key={col} className="px-3 py-2 text-xs font-mono whitespace-nowrap">
-                            {row[col] === null ? (
-                              <span className="text-gray-400 italic">null</span>
-                            ) : typeof row[col] === 'object' ? (
-                              JSON.stringify(row[col])
-                            ) : (
-                              String(row[col])
-                            )}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            
-            {!loadingSample && !sampleError && sampleData && sampleData.rows.length === 0 && (
-              <p className="text-gray-600 dark:text-gray-400">No data found in this table</p>
-            )}
-          </div>
-        )}
       </div>
     </div>
   );
