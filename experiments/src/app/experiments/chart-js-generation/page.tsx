@@ -32,6 +32,13 @@ interface QueryResult {
   rowCount: number;
 }
 
+interface ConversationEntry {
+  query: string;
+  sql: string;
+  result: QueryResult;
+  interpretation: string;
+}
+
 export default function ChartJSGeneration() {
   const [selectedEnv, setSelectedEnv] = useState("");
   const [schemas, setSchemas] = useState<string[]>([]);
@@ -41,6 +48,7 @@ export default function ChartJSGeneration() {
   const [columns, setColumns] = useState<Column[]>([]);
   const [sampleData, setSampleData] = useState<SampleData | null>(null);
   const [query, setQuery] = useState("");
+  const [conversationHistory, setConversationHistory] = useState<ConversationEntry[]>([]);
   const [generatedSQL, setGeneratedSQL] = useState("");
   const [queryResults, setQueryResults] = useState<QueryResult | null>(null);
   const [interpretation, setInterpretation] = useState("");
@@ -68,6 +76,7 @@ export default function ChartJSGeneration() {
       setSelectedTable("");
       setColumns([]);
       setSampleData(null);
+      setConversationHistory([]);
     }
   }, [selectedEnv]);
 
@@ -79,6 +88,7 @@ export default function ChartJSGeneration() {
       setSelectedTable("");
       setColumns([]);
       setSampleData(null);
+      setConversationHistory([]);
     }
   }, [selectedSchema, selectedEnv]);
 
@@ -89,6 +99,7 @@ export default function ChartJSGeneration() {
     } else {
       setColumns([]);
       setSampleData(null);
+      setConversationHistory([]);
     }
   }, [selectedTable, selectedSchema, selectedEnv]);
 
@@ -207,12 +218,26 @@ export default function ChartJSGeneration() {
       return;
     }
 
+    const currentQuery = query;
+
     // Reset previous results
     setGeneratedSQL("");
     setQueryResults(null);
     setInterpretation("");
     setChartConfig(null);
     setError("");
+    setQuery(""); // Clear input for next query
+
+    // Build conversation context from history
+    const conversationContext = conversationHistory.map(entry => ({
+      role: 'user',
+      content: entry.query,
+      sql: entry.sql,
+      result: {
+        rowCount: entry.result.rowCount,
+        preview: JSON.stringify(entry.result.rows.slice(0, 3))
+      }
+    }));
 
     // Step 1: Generate SQL
     setGeneratingSQL(true);
@@ -228,9 +253,10 @@ export default function ChartJSGeneration() {
           env: selectedEnv,
           schema: selectedSchema,
           table: selectedTable,
-          naturalLanguageQuery: query,
+          naturalLanguageQuery: currentQuery,
           columns,
           sampleData,
+          conversationContext,
         }),
       });
 
@@ -302,9 +328,10 @@ export default function ChartJSGeneration() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          naturalLanguageQuery: query,
+          naturalLanguageQuery: currentQuery,
           sql,
           result,
+          conversationContext,
         }),
       });
 
@@ -331,7 +358,7 @@ export default function ChartJSGeneration() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          naturalLanguageQuery: query,
+          naturalLanguageQuery: currentQuery,
           sql,
           result,
           interpretation: interpretationText,
@@ -344,6 +371,14 @@ export default function ChartJSGeneration() {
 
       const data = await response.json();
       setChartConfig(data.chartConfig);
+
+      // Add to conversation history after successful completion
+      setConversationHistory(prev => [...prev, {
+        query: currentQuery,
+        sql,
+        result,
+        interpretation: interpretationText,
+      }]);
     } catch (err) {
       console.error("Failed to generate chart:", err);
       setError("Failed to generate chart visualization");
@@ -569,35 +604,38 @@ export default function ChartJSGeneration() {
           <div className="mt-8">
             <h2 className="text-2xl mb-4">Generate Chart</h2>
             
-            <div className="mb-6">
-              <label htmlFor="query-input" className="block text-sm mb-2">
-                Describe the chart you want to create
-              </label>
-              <div className="flex gap-2">
-                <input
-                  id="query-input"
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      generateChart();
-                    }
-                  }}
-                  placeholder="e.g., Show me a bar chart of sales by month"
-                  className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  disabled={generatingSQL || executingSQL || generatingInterpretation || generatingChart}
-                />
-                <button
-                  onClick={generateChart}
-                  disabled={!query.trim() || generatingSQL || executingSQL || generatingInterpretation || generatingChart}
-                  className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                >
-                  Generate
-                </button>
+            {/* Only show input at top if no results yet */}
+            {!generatedSQL && !generatingSQL && (
+              <div className="mb-6">
+                <label htmlFor="query-input" className="block text-sm mb-2">
+                  Describe the chart you want to create
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="query-input"
+                    type="text"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        generateChart();
+                      }
+                    }}
+                    placeholder="e.g., Show me a bar chart of sales by month"
+                    className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    disabled={generatingSQL || executingSQL || generatingInterpretation || generatingChart}
+                  />
+                  <button
+                    onClick={generateChart}
+                    disabled={!query.trim() || generatingSQL || executingSQL || generatingInterpretation || generatingChart}
+                    className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Generate
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Error Display */}
             {error && (
@@ -707,6 +745,43 @@ export default function ChartJSGeneration() {
                   </div>
                 ) : chartConfig && (
                   <ChartDisplay config={chartConfig} />
+                )}
+              </div>
+            )}
+
+            {/* Follow-up Input - Show after chart is generated OR after an error */}
+            {((chartConfig || error || generatedSQL || queryResults || interpretation) && !generatingSQL && !executingSQL && !generatingInterpretation && !generatingChart) && (
+              <div className="mt-6 pt-6 border-t border-gray-300 dark:border-gray-700">
+                <label htmlFor="followup-input" className="block text-sm mb-2">
+                  {error ? 'Try another query' : 'Ask a follow-up question or create another chart'}
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="followup-input"
+                    type="text"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        generateChart();
+                      }
+                    }}
+                    placeholder={error ? "e.g., Show me a bar chart of sales by month" : "e.g., Now show a pie chart of the top 5 categories"}
+                    className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                  <button
+                    onClick={generateChart}
+                    disabled={!query.trim()}
+                    className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Generate
+                  </button>
+                </div>
+                {conversationHistory.length > 0 && !error && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                    Context: {conversationHistory.length} previous {conversationHistory.length === 1 ? 'query' : 'queries'} in history
+                  </p>
                 )}
               </div>
             )}
