@@ -8,11 +8,11 @@ const openai = new OpenAI({
 
 export async function POST(request: NextRequest) {
   try {
-    const { env, schema, table, naturalLanguageQuery, columns, sampleData, conversationContext } = await request.json();
+    const { env, schema, table, naturalLanguageQuery, columns, sampleData, conversationContext, schemaContext } = await request.json();
     
-    if (!env || !schema || !table || !naturalLanguageQuery) {
+    if (!env || !schema || !naturalLanguageQuery) {
       return NextResponse.json(
-        { error: "Environment, schema, table, and natural language query are required" },
+        { error: "Environment, schema, and natural language query are required" },
         { status: 400 }
       );
     }
@@ -25,14 +25,25 @@ export async function POST(request: NextRequest) {
     }
 
     // Format column information for the prompt
-    const columnInfo = columns.map((col: any) => 
-      `  - ${col.name}: ${col.type}${col.maxLength ? `(${col.maxLength})` : ''} ${col.nullable ? 'NULL' : 'NOT NULL'}${col.default ? ` DEFAULT ${col.default}` : ''}`
-    ).join('\n');
+    let columnInfo = '';
+    if (schemaContext && schemaContext.length > 0) {
+      // Build comprehensive schema information
+      columnInfo = schemaContext.map((tableInfo: any) => {
+        const cols = tableInfo.columns.map((col: any) => 
+          `    - ${col.name}: ${col.type} ${col.nullable ? 'NULL' : 'NOT NULL'}`
+        ).join('\n');
+        return `  ${schema}.${tableInfo.table}:\n${cols}`;
+      }).join('\n\n');
+    } else if (columns && columns.length > 0) {
+      columnInfo = columns.map((col: any) => 
+        `  - ${col.name}: ${col.type}${col.maxLength ? `(${col.maxLength})` : ''} ${col.nullable ? 'NULL' : 'NOT NULL'}${col.default ? ` DEFAULT ${col.default}` : ''}`
+      ).join('\n');
+    }
 
     // Format sample data for context
     const sampleDataStr = sampleData && sampleData.rows.length > 0
       ? JSON.stringify(sampleData.rows.slice(0, 3), null, 2)
-      : 'No sample data available';
+      : '';
 
     // Create the prompt for SQL generation
     const systemPrompt = `You are an expert PostgreSQL SQL query generator. Generate SQL queries based on natural language requests.
@@ -57,21 +68,28 @@ Rules:
       }).join('\n');
     }
 
-    const userPrompt = `Given the following PostgreSQL table:
+    const tableInfo = table ? `Specific Table: ${table}` : 'Query across any tables in the schema as needed';
+    
+    const userPrompt = `Given the following PostgreSQL schema:
 
 Schema: ${schema}
-Table: ${table}
+${tableInfo}
 
-Columns:
-${columnInfo}
+${columnInfo ? `Available Tables and Columns:
+${columnInfo}` : ''}
 
-Sample Data (first 3 rows):
-${sampleDataStr}
+${sampleDataStr ? `Sample Data (first 3 rows):
+${sampleDataStr}` : ''}
 ${conversationHistory}
 
 Generate a SQL query for: "${naturalLanguageQuery}"
 
-${conversationHistory ? 'Consider the conversation history and build upon previous queries if relevant.' : ''}
+Important:
+- Always use fully qualified table names (schema.table)
+- Use appropriate JOINs if the query requires data from multiple tables
+- Make sure to infer relationships between tables based on column names
+${conversationHistory ? '- Consider the conversation history and build upon previous queries if relevant' : ''}
+
 Return ONLY the SQL query.`;
 
     // Call OpenAI API
