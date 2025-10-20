@@ -21,6 +21,12 @@ interface SampleData {
   rows: Record<string, any>[];
 }
 
+interface QueryResult {
+  columns: string[];
+  rows: Record<string, any>[];
+  rowCount: number;
+}
+
 export default function NaturalLanguageToSQL() {
   const [selectedEnv, setSelectedEnv] = useState("");
   const [schemas, setSchemas] = useState<string[]>([]);
@@ -31,6 +37,7 @@ export default function NaturalLanguageToSQL() {
   const [sampleData, setSampleData] = useState<SampleData | null>(null);
   const [naturalLanguageQuery, setNaturalLanguageQuery] = useState("");
   const [generatedSQL, setGeneratedSQL] = useState("");
+  const [queryResult, setQueryResult] = useState<QueryResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingTables, setLoadingTables] = useState(false);
   const [loadingColumns, setLoadingColumns] = useState(false);
@@ -41,6 +48,7 @@ export default function NaturalLanguageToSQL() {
   const [columnsError, setColumnsError] = useState("");
   const [sampleError, setSampleError] = useState("");
   const [sqlError, setSqlError] = useState("");
+  const [executionError, setExecutionError] = useState("");
 
   useEffect(() => {
     if (selectedEnv) {
@@ -196,6 +204,8 @@ export default function NaturalLanguageToSQL() {
 
     setGeneratingSQL(true);
     setSqlError("");
+    setExecutionError("");
+    setQueryResult(null);
     
     try {
       const response = await fetch("/api/generate-sql", {
@@ -219,6 +229,12 @@ export default function NaturalLanguageToSQL() {
 
       const data = await response.json();
       setGeneratedSQL(data.sql || "");
+      
+      if (data.error) {
+        setExecutionError(data.error);
+      } else if (data.result) {
+        setQueryResult(data.result);
+      }
     } catch (err) {
       setSqlError("Failed to generate SQL");
       console.error(err);
@@ -427,6 +443,55 @@ export default function NaturalLanguageToSQL() {
                 <div className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-900">
                   <pre className="text-sm font-mono whitespace-pre-wrap">{generatedSQL}</pre>
                 </div>
+              </div>
+            )}
+
+            {executionError && (
+              <div className="mt-6">
+                <h3 className="text-xl mb-2 text-red-600 dark:text-red-400">Execution Error</h3>
+                <div className="border border-red-300 dark:border-red-700 rounded-lg p-4 bg-red-50 dark:bg-red-950">
+                  <pre className="text-sm font-mono whitespace-pre-wrap text-red-600 dark:text-red-400">{executionError}</pre>
+                </div>
+              </div>
+            )}
+
+            {queryResult && (
+              <div className="mt-6">
+                <h3 className="text-xl mb-2">Query Results ({queryResult.rowCount} rows)</h3>
+                {queryResult.rows.length > 0 ? (
+                  <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-auto max-h-96">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
+                        <tr>
+                          {queryResult.columns.map((col) => (
+                            <th key={col} className="px-3 py-2 text-left text-xs font-medium whitespace-nowrap">
+                              {col}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                        {queryResult.rows.map((row, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-800">
+                            {queryResult.columns.map((col) => (
+                              <td key={col} className="px-3 py-2 text-xs font-mono whitespace-nowrap">
+                                {row[col] === null ? (
+                                  <span className="text-gray-400 italic">null</span>
+                                ) : typeof row[col] === 'object' ? (
+                                  JSON.stringify(row[col])
+                                ) : (
+                                  String(row[col])
+                                )}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="text-gray-600 dark:text-gray-400">Query executed successfully but returned no rows.</p>
+                )}
               </div>
             )}
           </div>
