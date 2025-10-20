@@ -68,8 +68,9 @@ Your task:
    - Dimension tables arranged in a circle around fact tables
    - Bridge tables positioned between related tables
    - Minimize edge crossings
-   - Use a canvas size of approximately 2000x2000 pixels
-   - Space tables at least 400 pixels apart horizontally and 300 pixels vertically
+   - Use a canvas size of approximately 3000x3000 pixels
+   - Space tables at least 600 pixels apart horizontally and 500 pixels vertically
+   - Create generous spacing for a clean, readable layout
 
 Return your response as JSON with this exact structure:
 {

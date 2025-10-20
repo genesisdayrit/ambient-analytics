@@ -318,11 +318,32 @@ export default function JoinTables() {
               )}
               
               {!loadingTables && !loadingColumns && !tablesError && tablesWithColumns.length > 0 && (
-                <ERDVisualization 
-                  tablesWithColumns={tablesWithColumns} 
-                  foreignKeys={foreignKeys}
-                  optimizedLayout={optimizedLayout}
-                />
+                <>
+                  {optimizedLayout && (
+                    <div className="mb-4 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+                      <div className="flex items-center gap-6">
+                        <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">Legend:</span>
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 bg-orange-600 rounded"></div>
+                          <span className="text-xs text-gray-600 dark:text-gray-400">Fact Tables</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 bg-blue-600 rounded"></div>
+                          <span className="text-xs text-gray-600 dark:text-gray-400">Dimension Tables</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 bg-purple-600 rounded"></div>
+                          <span className="text-xs text-gray-600 dark:text-gray-400">Bridge Tables</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <ERDVisualization 
+                    tablesWithColumns={tablesWithColumns} 
+                    foreignKeys={foreignKeys}
+                    optimizedLayout={optimizedLayout}
+                  />
+                </>
               )}
               
               {!loadingTables && !tablesError && tables.length === 0 && (
@@ -460,15 +481,16 @@ function ERDVisualization({ tablesWithColumns, foreignKeys, optimizedLayout }: E
             fontSize: '12px',
             width: 280,
             padding: 0,
+            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
           },
         };
       });
     }
     
-    // Default grid layout
+    // Default grid layout - more spread out
     const columns = Math.ceil(Math.sqrt(tablesWithColumns.length));
-    const horizontalSpacing = 350;
-    const verticalSpacing = 250;
+    const horizontalSpacing = 500;
+    const verticalSpacing = 400;
     
     return tablesWithColumns.map((tableWithCols, index) => {
       const row = Math.floor(index / columns);
@@ -492,6 +514,7 @@ function ERDVisualization({ tablesWithColumns, foreignKeys, optimizedLayout }: E
           fontSize: '12px',
           width: 280,
           padding: 0,
+          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
         },
       };
     });
@@ -507,23 +530,47 @@ function ERDVisualization({ tablesWithColumns, foreignKeys, optimizedLayout }: E
       type: 'smoothstep',
       animated: false,
       label: `${fk.fromColumn} → ${fk.toColumn}`,
-      style: { stroke: '#2563eb', strokeWidth: 2 },
-      labelStyle: { fontSize: 10, fill: '#6b7280' },
-      labelBgStyle: { fill: 'white', fillOpacity: 0.8 },
+      style: { 
+        stroke: '#2563eb', 
+        strokeWidth: 2,
+        strokeOpacity: 0.6,
+      },
+      labelStyle: { 
+        fontSize: 9, 
+        fill: '#6b7280',
+        fontWeight: 500,
+      },
+      labelBgStyle: { 
+        fill: 'white', 
+        fillOpacity: 0.9,
+        rx: 4,
+        ry: 4,
+      },
+      labelBgPadding: [4, 8] as [number, number],
+      labelBgBorderRadius: 4,
     }));
   }, [foreignKeys]);
 
   return (
-    <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden" style={{ height: '600px' }}>
+    <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden" style={{ height: '800px' }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
         fitView
-        minZoom={0.1}
-        maxZoom={2}
+        fitViewOptions={{
+          padding: 0.2,
+          minZoom: 0.1,
+          maxZoom: 1,
+        }}
+        minZoom={0.05}
+        maxZoom={1.5}
+        defaultEdgeOptions={{
+          type: 'smoothstep',
+          style: { strokeWidth: 2 },
+        }}
       >
-        <Background />
+        <Background gap={16} size={1} />
         <Controls />
         <MiniMap 
           nodeColor={(node) => {
@@ -531,6 +578,10 @@ function ERDVisualization({ tablesWithColumns, foreignKeys, optimizedLayout }: E
             if (type === 'fact') return '#ea580c';
             if (type === 'bridge') return '#9333ea';
             return '#2563eb';
+          }}
+          style={{
+            height: 120,
+            width: 160,
           }}
         />
       </ReactFlow>
