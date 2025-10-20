@@ -8,7 +8,7 @@ const openai = new OpenAI({
 
 export async function POST(request: NextRequest) {
   try {
-    const { env, schema, table, naturalLanguageQuery, columns, sampleData } = await request.json();
+    const { env, schema, table, naturalLanguageQuery, columns, sampleData, conversationContext } = await request.json();
     
     if (!env || !schema || !table || !naturalLanguageQuery) {
       return NextResponse.json(
@@ -46,6 +46,17 @@ Rules:
 6. For date/time queries, use PostgreSQL date functions
 7. Make queries efficient and use indexes when possible`;
 
+    // Build conversation history if provided
+    let conversationHistory = '';
+    if (conversationContext && conversationContext.length > 0) {
+      conversationHistory = '\n\nConversation History:\n' + conversationContext.map((msg: any, idx: number) => {
+        let text = `${idx + 1}. ${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`;
+        if (msg.sql) text += `\n   SQL: ${msg.sql}`;
+        if (msg.result) text += `\n   Result: ${msg.result.rowCount} rows`;
+        return text;
+      }).join('\n');
+    }
+
     const userPrompt = `Given the following PostgreSQL table:
 
 Schema: ${schema}
@@ -56,9 +67,11 @@ ${columnInfo}
 
 Sample Data (first 3 rows):
 ${sampleDataStr}
+${conversationHistory}
 
 Generate a SQL query for: "${naturalLanguageQuery}"
 
+${conversationHistory ? 'Consider the conversation history and build upon previous queries if relevant.' : ''}
 Return ONLY the SQL query.`;
 
     // Call OpenAI API

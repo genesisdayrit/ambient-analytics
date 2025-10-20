@@ -7,7 +7,7 @@ const openai = new OpenAI({
 
 export async function POST(request: NextRequest) {
   try {
-    const { naturalLanguageQuery, sql, result } = await request.json();
+    const { naturalLanguageQuery, sql, result, conversationContext } = await request.json();
     
     if (!naturalLanguageQuery || !sql || !result) {
       return NextResponse.json(
@@ -23,9 +23,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const interpretationPrompt = `You are a helpful data analyst assistant. Based on the following query and results, provide a clear, concise interpretation and summary.
+    // Build conversation history if provided
+    let conversationHistory = '';
+    if (conversationContext && conversationContext.length > 0) {
+      conversationHistory = '\n\nPrevious Conversation:\n' + conversationContext.map((msg: any, idx: number) => {
+        let text = `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`;
+        if (msg.result) text += ` (${msg.result.rowCount} rows returned)`;
+        return text;
+      }).join('\n');
+    }
 
-User's Question: "${naturalLanguageQuery}"
+    const interpretationPrompt = `You are a helpful data analyst assistant. Based on the following query and results, provide a clear, concise interpretation and summary.
+${conversationHistory}
+
+Current User's Question: "${naturalLanguageQuery}"
 
 SQL Query Executed:
 ${sql}
@@ -39,6 +50,7 @@ Provide a natural language summary and interpretation of these results. Focus on
 2. Key insights from the data
 3. Any notable patterns or trends
 4. Keep it concise and conversational
+${conversationHistory ? '5. Reference previous context if relevant' : ''}
 
 Response:`;
 

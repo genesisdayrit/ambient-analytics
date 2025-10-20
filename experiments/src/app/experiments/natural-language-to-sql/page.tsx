@@ -27,6 +27,17 @@ interface QueryResult {
   rowCount: number;
 }
 
+interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sql?: string;
+  result?: QueryResult;
+  interpretation?: string;
+  error?: string;
+  timestamp: Date;
+}
+
 export default function NaturalLanguageToSQL() {
   const [selectedEnv, setSelectedEnv] = useState("");
   const [schemas, setSchemas] = useState<string[]>([]);
@@ -35,10 +46,9 @@ export default function NaturalLanguageToSQL() {
   const [selectedTable, setSelectedTable] = useState("");
   const [columns, setColumns] = useState<Column[]>([]);
   const [sampleData, setSampleData] = useState<SampleData | null>(null);
-  const [naturalLanguageQuery, setNaturalLanguageQuery] = useState("");
-  const [generatedSQL, setGeneratedSQL] = useState("");
-  const [queryResult, setQueryResult] = useState<QueryResult | null>(null);
-  const [interpretation, setInterpretation] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [currentInput, setCurrentInput] = useState("");
+  const [expandedResults, setExpandedResults] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [loadingTables, setLoadingTables] = useState(false);
   const [loadingColumns, setLoadingColumns] = useState(false);
@@ -50,8 +60,6 @@ export default function NaturalLanguageToSQL() {
   const [tablesError, setTablesError] = useState("");
   const [columnsError, setColumnsError] = useState("");
   const [sampleError, setSampleError] = useState("");
-  const [sqlError, setSqlError] = useState("");
-  const [executionError, setExecutionError] = useState("");
 
   useEffect(() => {
     if (selectedEnv) {
@@ -63,7 +71,7 @@ export default function NaturalLanguageToSQL() {
       setSelectedTable("");
       setColumns([]);
       setSampleData(null);
-      setGeneratedSQL("");
+      setMessages([]);
     }
   }, [selectedEnv]);
 
@@ -75,7 +83,7 @@ export default function NaturalLanguageToSQL() {
       setSelectedTable("");
       setColumns([]);
       setSampleData(null);
-      setGeneratedSQL("");
+      setMessages([]);
     }
   }, [selectedSchema, selectedEnv]);
 
@@ -86,7 +94,7 @@ export default function NaturalLanguageToSQL() {
     } else {
       setColumns([]);
       setSampleData(null);
-      setGeneratedSQL("");
+      setMessages([]);
     }
   }, [selectedTable, selectedSchema, selectedEnv]);
 
@@ -200,17 +208,41 @@ export default function NaturalLanguageToSQL() {
     }
   };
 
-  const generateSQL = async () => {
-    if (!naturalLanguageQuery.trim()) {
+  const sendMessage = async () => {
+    if (!currentInput.trim()) {
       return;
     }
 
-    // Reset states
-    setSqlError("");
-    setExecutionError("");
-    setQueryResult(null);
-    setInterpretation("");
-    setGeneratedSQL("");
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: currentInput,
+      timestamp: new Date(),
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setCurrentInput("");
+
+    // Create assistant message placeholder
+    const assistantMessageId = (Date.now() + 1).toString();
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, assistantMessage]);
+
+    // Build conversation context for the API
+    const conversationContext = messages.map(msg => ({
+      role: msg.role,
+      content: msg.content,
+      sql: msg.sql,
+      result: msg.result ? {
+        rowCount: msg.result.rowCount,
+        preview: JSON.stringify(msg.result.rows.slice(0, 3))
+      } : undefined
+    }));
     
     // Step 1: Generate SQL
     setGeneratingSQL(true);
@@ -226,9 +258,10 @@ export default function NaturalLanguageToSQL() {
           env: selectedEnv,
           schema: selectedSchema,
           table: selectedTable,
-          naturalLanguageQuery,
+          naturalLanguageQuery: currentInput,
           columns,
           sampleData,
+          conversationContext,
         }),
       });
 
@@ -238,9 +271,19 @@ export default function NaturalLanguageToSQL() {
 
       const data = await response.json();
       sql = data.sql || "";
-      setGeneratedSQL(sql);
+      
+      // Update assistant message with SQL
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, sql } 
+          : msg
+      ));
     } catch (err) {
-      setSqlError("Failed to generate SQL");
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, error: "Failed to generate SQL" } 
+          : msg
+      ));
       console.error(err);
       setGeneratingSQL(false);
       return;
@@ -250,7 +293,7 @@ export default function NaturalLanguageToSQL() {
 
     // Step 2: Execute SQL
     setExecutingSQL(true);
-    let result = null;
+    let result: QueryResult | undefined = undefined;
     
     try {
       const response = await fetch("/api/execute-sql", {
@@ -271,15 +314,29 @@ export default function NaturalLanguageToSQL() {
       const data = await response.json();
       
       if (data.error) {
-        setExecutionError(data.error);
+        setMessages(prev => prev.map(msg => 
+          msg.id === assistantMessageId 
+            ? { ...msg, error: data.error } 
+            : msg
+        ));
         setExecutingSQL(false);
         return;
       }
       
       result = data.result;
-      setQueryResult(result);
+      
+      // Update assistant message with result
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, result: result } 
+          : msg
+      ));
     } catch (err) {
-      setExecutionError("Failed to execute SQL");
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, error: "Failed to execute SQL" } 
+          : msg
+      ));
       console.error(err);
       setExecutingSQL(false);
       return;
@@ -298,9 +355,10 @@ export default function NaturalLanguageToSQL() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            naturalLanguageQuery,
+            naturalLanguageQuery: currentInput,
             sql,
             result,
+            conversationContext,
           }),
         });
 
@@ -309,10 +367,15 @@ export default function NaturalLanguageToSQL() {
         }
 
         const data = await response.json();
-        setInterpretation(data.interpretation || "");
+        
+        // Update assistant message with interpretation
+        setMessages(prev => prev.map(msg => 
+          msg.id === assistantMessageId 
+            ? { ...msg, interpretation: data.interpretation || "", content: data.interpretation || "" } 
+            : msg
+        ));
       } catch (err) {
         console.error("Failed to generate interpretation:", err);
-        // Don't show error to user, interpretation is optional
       } finally {
         setGeneratingInterpretation(false);
       }
@@ -547,122 +610,175 @@ export default function NaturalLanguageToSQL() {
 
         {selectedTable && (
           <div className="mt-8">
-            <h2 className="text-2xl mb-4">Natural Language Query</h2>
+            <h2 className="text-2xl mb-4">Chat with Table</h2>
             
-            <div className="mb-4">
-              <textarea
-                value={naturalLanguageQuery}
-                onChange={(e) => setNaturalLanguageQuery(e.target.value)}
-                placeholder="Enter your query in natural language... (e.g., 'Show me all users who signed up in the last 30 days')"
-                className="w-full px-4 py-3 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-400 min-h-[100px]"
-              />
+            {/* Messages Display */}
+            <div className="mb-6 space-y-4 max-h-[600px] overflow-y-auto border border-gray-300 dark:border-gray-700 rounded-lg p-4">
+              {messages.length === 0 ? (
+                <p className="text-gray-500 dark:text-gray-400 text-center py-8">
+                  Start a conversation by asking a question about your data...
+                </p>
+              ) : (
+                messages.map((message) => (
+                  <div key={message.id} className={`${message.role === 'user' ? 'text-right' : 'text-left'}`}>
+                    {message.role === 'user' ? (
+                      <div className="inline-block bg-blue-600 text-white px-4 py-2 rounded-lg max-w-[80%]">
+                        <p className="text-sm">{message.content}</p>
+                      </div>
+                    ) : (
+                      <div className="inline-block bg-gray-100 dark:bg-gray-800 px-4 py-3 rounded-lg max-w-[90%] text-left">
+                        {message.error ? (
+                          <div className="text-red-600 dark:text-red-400">
+                            <p className="text-sm font-semibold mb-1">Error</p>
+                            <p className="text-sm">{message.error}</p>
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {message.sql && (
+                              <div>
+                                <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">SQL Query:</p>
+                                <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto">
+                                  {message.sql}
+                                </pre>
+                              </div>
+                            )}
+                            
+                            {message.result && (
+                              <div>
+                                <div className="flex items-center justify-between mb-1">
+                                  <p className="text-xs font-semibold text-gray-600 dark:text-gray-400">
+                                    Results ({message.result.rowCount} rows)
+                                  </p>
+                                  {message.result.rowCount > 5 && (
+                                    <button
+                                      onClick={() => {
+                                        const newExpanded = new Set(expandedResults);
+                                        if (expandedResults.has(message.id)) {
+                                          newExpanded.delete(message.id);
+                                        } else {
+                                          newExpanded.add(message.id);
+                                        }
+                                        setExpandedResults(newExpanded);
+                                      }}
+                                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                                    >
+                                      {expandedResults.has(message.id) ? 'Show less' : `Show all ${message.result.rowCount} rows`}
+                                    </button>
+                                  )}
+                                </div>
+                                <div className={`border border-gray-300 dark:border-gray-700 rounded overflow-x-auto ${
+                                  expandedResults.has(message.id) ? 'max-h-96' : 'max-h-64'
+                                }`}>
+                                  <table className="w-full text-xs">
+                                    <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
+                                      <tr>
+                                        {message.result.columns.map((col) => (
+                                          <th key={col} className="px-2 py-1 text-left font-medium whitespace-nowrap">
+                                            {col}
+                                          </th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                                      {(expandedResults.has(message.id) 
+                                        ? message.result.rows 
+                                        : message.result.rows.slice(0, 5)
+                                      ).map((row, idx) => (
+                                        <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                                          {message.result!.columns.map((col) => (
+                                            <td key={col} className="px-2 py-1 font-mono whitespace-nowrap">
+                                              {row[col] === null ? (
+                                                <span className="text-gray-400 italic">null</span>
+                                              ) : typeof row[col] === 'object' ? (
+                                                JSON.stringify(row[col])
+                                              ) : (
+                                                String(row[col])
+                                              )}
+                                            </td>
+                                          ))}
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                                {!expandedResults.has(message.id) && message.result.rowCount > 5 && (
+                                  <p className="text-xs text-gray-500 mt-1">Showing first 5 of {message.result.rowCount} rows</p>
+                                )}
+                              </div>
+                            )}
+                            
+                            {message.interpretation && (
+                              <div className="border-t border-gray-300 dark:border-gray-700 pt-2">
+                                <p className="text-sm leading-relaxed">{message.interpretation}</p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+              
+              {/* Loading indicators */}
+              {generatingSQL && (
+                <div className="text-left">
+                  <div className="inline-block bg-gray-100 dark:bg-gray-800 px-4 py-3 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                      <span className="text-sm">Generating SQL...</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {executingSQL && !generatingSQL && (
+                <div className="text-left">
+                  <div className="inline-block bg-gray-100 dark:bg-gray-800 px-4 py-3 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                      <span className="text-sm">Executing query...</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {generatingInterpretation && !executingSQL && !generatingSQL && (
+                <div className="text-left">
+                  <div className="inline-block bg-gray-100 dark:bg-gray-800 px-4 py-3 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                      <span className="text-sm">Generating interpretation...</span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
             
-            <button
-              onClick={generateSQL}
-              disabled={!naturalLanguageQuery.trim() || generatingSQL || executingSQL || generatingInterpretation}
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-            >
-              {generatingSQL ? "Generating SQL..." : 
-               executingSQL ? "Executing Query..." : 
-               generatingInterpretation ? "Generating Interpretation..." : 
-               "Generate SQL"}
-            </button>
-
-            {sqlError && (
-              <p className="text-red-600 dark:text-red-400 mt-4">{sqlError}</p>
-            )}
-
-            {(generatingSQL || generatedSQL) && (
-              <div className="mt-6">
-                <h3 className="text-xl mb-2">Generated SQL</h3>
-                {generatingSQL ? (
-                  <div className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-900">
-                    <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                      <span className="text-sm text-gray-600 dark:text-gray-400">Generating SQL query...</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 bg-gray-50 dark:bg-gray-900">
-                    <pre className="text-sm font-mono whitespace-pre-wrap">{generatedSQL}</pre>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {(executingSQL || executionError || queryResult) && (
-              <div className="mt-6">
-                <h3 className="text-xl mb-2">Query Results</h3>
-                {executingSQL ? (
-                  <div className="border border-gray-300 dark:border-gray-700 rounded-lg p-4">
-                    <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                      <span className="text-sm text-gray-600 dark:text-gray-400">Executing query...</span>
-                    </div>
-                  </div>
-                ) : executionError ? (
-                  <div className="border border-red-300 dark:border-red-700 rounded-lg p-4 bg-red-50 dark:bg-red-950">
-                    <p className="text-sm font-semibold text-red-600 dark:text-red-400 mb-2">Execution Error</p>
-                    <pre className="text-sm font-mono whitespace-pre-wrap text-red-600 dark:text-red-400">{executionError}</pre>
-                  </div>
-                ) : queryResult && queryResult.rows.length > 0 ? (
-                  <>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">{queryResult.rowCount} rows</p>
-                    <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-auto max-h-96">
-                      <table className="w-full text-sm">
-                        <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
-                          <tr>
-                            {queryResult.columns.map((col) => (
-                              <th key={col} className="px-3 py-2 text-left text-xs font-medium whitespace-nowrap">
-                                {col}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                          {queryResult.rows.map((row, idx) => (
-                            <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-800">
-                              {queryResult.columns.map((col) => (
-                                <td key={col} className="px-3 py-2 text-xs font-mono whitespace-nowrap">
-                                  {row[col] === null ? (
-                                    <span className="text-gray-400 italic">null</span>
-                                  ) : typeof row[col] === 'object' ? (
-                                    JSON.stringify(row[col])
-                                  ) : (
-                                    String(row[col])
-                                  )}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                ) : queryResult && queryResult.rows.length === 0 ? (
-                  <p className="text-gray-600 dark:text-gray-400">Query executed successfully but returned no rows.</p>
-                ) : null}
-              </div>
-            )}
-
-            {(generatingInterpretation || interpretation) && (
-              <div className="mt-6">
-                <h3 className="text-xl mb-2">LLM Interpretation</h3>
-                {generatingInterpretation ? (
-                  <div className="border border-blue-300 dark:border-blue-700 rounded-lg p-4 bg-blue-50 dark:bg-blue-950">
-                    <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                      <span className="text-sm text-gray-600 dark:text-gray-400">Generating interpretation...</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="border border-blue-300 dark:border-blue-700 rounded-lg p-4 bg-blue-50 dark:bg-blue-950">
-                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{interpretation}</p>
-                  </div>
-                )}
-              </div>
-            )}
+            {/* Input Area */}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={currentInput}
+                onChange={(e) => setCurrentInput(e.target.value)}
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                  }
+                }}
+                placeholder="Ask a question about your data..."
+                className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                disabled={generatingSQL || executingSQL || generatingInterpretation}
+              />
+              <button
+                onClick={sendMessage}
+                disabled={!currentInput.trim() || generatingSQL || executingSQL || generatingInterpretation}
+                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+              >
+                Send
+              </button>
+            </div>
           </div>
         )}
         </div>
