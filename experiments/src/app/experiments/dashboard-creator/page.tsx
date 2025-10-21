@@ -195,7 +195,7 @@ function ChartNode({ data, selected }: { data: SavedChart & { onRemove: () => vo
       </div>
       {data.chartConfig && (
         <div className="mb-2 flex-1 min-h-0">
-          <ChartDisplay config={data.chartConfig} />
+          <ChartDisplay config={data.chartConfig} isResizable={true} />
         </div>
       )}
       <div className="flex-shrink-0">
@@ -1620,7 +1620,7 @@ export default function DashboardCreator() {
 }
 
 // Chart Display Component
-function ChartDisplay({ config }: { config: ChartConfiguration }) {
+function ChartDisplay({ config, isResizable = false }: { config: ChartConfiguration; isResizable?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1633,13 +1633,13 @@ function ChartDisplay({ config }: { config: ChartConfiguration }) {
       chartRef.current.destroy();
     }
 
-    // Make chart responsive by ensuring config has responsive options
+    // Make chart responsive, but only disable aspect ratio if it's in a resizable container
     const responsiveConfig = {
       ...config,
       options: {
         ...config.options,
         responsive: true,
-        maintainAspectRatio: false,
+        maintainAspectRatio: !isResizable,
       }
     };
 
@@ -1656,10 +1656,12 @@ function ChartDisplay({ config }: { config: ChartConfiguration }) {
         chartRef.current.destroy();
       }
     };
-  }, [config]);
+  }, [config, isResizable]);
 
-  // Handle resize events to update chart
+  // Handle resize events to update chart (only if resizable)
   useEffect(() => {
+    if (!isResizable) return;
+
     const handleResize = () => {
       if (chartRef.current) {
         chartRef.current.resize();
@@ -1677,13 +1679,21 @@ function ChartDisplay({ config }: { config: ChartConfiguration }) {
     return () => {
       resizeObserver.disconnect();
     };
-  }, []);
+  }, [isResizable]);
 
   return (
-    <div ref={containerRef} className="bg-white dark:bg-gray-900 p-4 rounded-lg border border-gray-300 dark:border-gray-700" style={{ height: '100%', minHeight: '200px' }}>
-      <div style={{ position: 'relative', height: '100%', width: '100%' }}>
+    <div 
+      ref={containerRef} 
+      className="bg-white dark:bg-gray-900 p-4 rounded-lg border border-gray-300 dark:border-gray-700" 
+      style={isResizable ? { height: '100%', minHeight: '200px' } : undefined}
+    >
+      {isResizable ? (
+        <div style={{ position: 'relative', height: '100%', width: '100%' }}>
+          <canvas ref={canvasRef}></canvas>
+        </div>
+      ) : (
         <canvas ref={canvasRef}></canvas>
-      </div>
+      )}
     </div>
   );
 }
