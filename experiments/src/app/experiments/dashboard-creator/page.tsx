@@ -95,15 +95,17 @@ interface SavedChart {
 
 // Custom Node Components for React Flow
 function QueryNode({ data, selected }: { data: SavedQuery & { onRemove: () => void; onReExecute: () => void }; selected?: boolean }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  
   return (
-    <div className="bg-white dark:bg-gray-800 border-2 border-blue-400 dark:border-blue-600 rounded-lg p-4 shadow-lg w-full h-full overflow-auto" style={{ minWidth: '350px', minHeight: '200px' }}>
+    <div className="bg-white dark:bg-gray-800 border-2 border-blue-400 dark:border-blue-600 rounded-lg p-4 shadow-lg w-full h-full flex flex-col" style={{ minWidth: '350px', minHeight: '200px' }}>
       <NodeResizer 
         color="#3b82f6" 
         isVisible={selected}
         minWidth={350}
         minHeight={200}
       />
-      <div className="flex items-start justify-between mb-2">
+      <div className="flex items-start justify-between mb-2 flex-shrink-0">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-lg">📊</span>
@@ -118,15 +120,23 @@ function QueryNode({ data, selected }: { data: SavedQuery & { onRemove: () => vo
           ✕
         </button>
       </div>
-      <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto mb-2 max-h-24">
+      <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto mb-2 max-h-20 overflow-y-auto flex-shrink-0">
         {data.sql}
       </pre>
       {data.result && (
-        <div className="mb-2">
-          <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">
-            Results: {data.result.rowCount} rows
-          </p>
-          <div className="border border-gray-200 dark:border-gray-700 rounded overflow-x-auto max-h-32">
+        <div className={`mb-2 flex flex-col min-h-0 ${isExpanded ? 'flex-1' : 'flex-shrink-0'}`}>
+          <div className="flex items-center justify-between mb-1 flex-shrink-0">
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              Results: {data.result.rowCount} rows
+            </p>
+            <button
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              {isExpanded ? '▼ Collapse' : '▶ Expand'}
+            </button>
+          </div>
+          <div className={`border border-gray-200 dark:border-gray-700 rounded ${isExpanded ? 'overflow-auto flex-1' : 'overflow-hidden'}`}>
             <table className="w-full text-xs">
               <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
                 <tr>
@@ -138,7 +148,7 @@ function QueryNode({ data, selected }: { data: SavedQuery & { onRemove: () => vo
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                {data.result.rows.slice(0, 3).map((row, idx) => (
+                {(isExpanded ? data.result.rows : data.result.rows.slice(0, 3)).map((row, idx) => (
                   <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                     {data.result!.columns.map((col) => (
                       <td key={col} className="px-2 py-1 font-mono whitespace-nowrap">
@@ -156,12 +166,17 @@ function QueryNode({ data, selected }: { data: SavedQuery & { onRemove: () => vo
               </tbody>
             </table>
           </div>
+          {!isExpanded && data.result.rowCount > 3 && (
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Showing first 3 of {data.result.rowCount} rows
+            </p>
+          )}
         </div>
       )}
       <button
         onClick={data.onReExecute}
         disabled={data.isExecuting}
-        className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors w-full"
+        className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors w-full flex-shrink-0"
       >
         {data.isExecuting ? '⏳ Executing...' : '🔄 Re-execute'}
       </button>
