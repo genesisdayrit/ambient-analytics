@@ -1,29 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { Client } from "pg";
+import { wrapOpenAI } from "langsmith/wrappers";
+import { traceable } from "langsmith/traceable";
 
-const openai = new OpenAI({
+const openai = wrapOpenAI(new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-});
+}));
 
-export async function POST(request: NextRequest) {
-  try {
-    const { env, schema, table, naturalLanguageQuery, columns, sampleData, conversationContext, schemaContext } = await request.json();
+// Wrap the main SQL generation logic in traceable for full observability
+const generateSQLLogic = traceable(
+  async (params: {
+    env: string;
+    schema: string;
+    table?: string;
+    naturalLanguageQuery: string;
+    columns?: any[];
+    sampleData?: any;
+    conversationContext?: any[];
+    schemaContext?: any[];
+  }) => {
+    const { env, schema, table, naturalLanguageQuery, columns, sampleData, conversationContext, schemaContext } = params;
     
-    if (!env || !schema || !naturalLanguageQuery) {
-      return NextResponse.json(
-        { error: "Environment, schema, and natural language query are required" },
-        { status: 400 }
-      );
-    }
-
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json(
-        { error: "OpenAI API key not configured" },
-        { status: 500 }
-      );
-    }
-
     // Format column information for the prompt
     let columnInfo = '';
     if (schemaContext && schemaContext.length > 0) {
@@ -92,7 +90,7 @@ ${conversationHistory ? '- Consider the conversation history and build upon prev
 
 Return ONLY the SQL query.`;
 
-    // Call OpenAI API
+    // Call OpenAI API (automatically traced by wrapOpenAI)
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
@@ -111,7 +109,43 @@ Return ONLY the SQL query.`;
       .replace(/```\n?/g, '')
       .trim();
 
-    return NextResponse.json({ sql: cleanedSQL });
+    return { sql: cleanedSQL };
+  },
+  { name: "generate_sql" } // Name the trace for better visibility in LangSmith
+);
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { env, schema, table, naturalLanguageQuery, columns, sampleData, conversationContext, schemaContext } = body;
+    
+    if (!env || !schema || !naturalLanguageQuery) {
+      return NextResponse.json(
+        { error: "Environment, schema, and natural language query are required" },
+        { status: 400 }
+      );
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        { error: "OpenAI API key not configured" },
+        { status: 500 }
+      );
+    }
+
+    // Call the traced SQL generation logic
+    const result = await generateSQLLogic({
+      env,
+      schema,
+      table,
+      naturalLanguageQuery,
+      columns,
+      sampleData,
+      conversationContext,
+      schemaContext,
+    });
+
+    return NextResponse.json(result);
   } catch (error) {
     console.error("Error generating SQL:", error);
     return NextResponse.json(
@@ -120,4 +154,3 @@ Return ONLY the SQL query.`;
     );
   }
 }
-

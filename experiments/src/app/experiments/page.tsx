@@ -6,6 +6,8 @@ const experiments = [
   { id: 3, title: "chart.js generation", href: "/experiments/chart-js-generation" },
   { id: 4, title: "query generation", href: "/experiments/query-generation" },
   { id: 5, title: "ERD generator", href: "/experiments/join-tables" },
+  { id: 6, title: "langsmith evaluations", href: "/experiments/langsmith-evaluations" },
+  { id: 7, title: "sql chat with ai evaluation", href: "/experiments/sql-with-evaluation" },
 ];
 
 export default function Experiments() {
