@@ -359,40 +359,44 @@ export default function DashboardCreator() {
 
   // Sync saved queries and charts to React Flow nodes
   useEffect(() => {
-    const newNodes: Node[] = [];
-    
-    // Add query nodes
-    savedQueries.forEach((query, index) => {
-      newNodes.push({
-        id: `query-${query.id}`,
-        type: 'queryNode',
-        position: { x: 50 + (index % 3) * 420, y: 50 + Math.floor(index / 3) * 350 },
-        style: { width: 380, height: 280 },
-        data: {
-          ...query,
-          onRemove: () => removeSavedQuery(query.id),
-          onReExecute: () => reExecuteSavedQuery(query.id),
-        },
+    setNodes((currentNodes) => {
+      const newNodes: Node[] = [];
+      
+      // Add query nodes
+      savedQueries.forEach((query, index) => {
+        const existingNode = currentNodes.find(n => n.id === `query-${query.id}`);
+        newNodes.push({
+          id: `query-${query.id}`,
+          type: 'queryNode',
+          position: existingNode?.position || { x: 50 + (index % 3) * 420, y: 50 + Math.floor(index / 3) * 350 },
+          style: existingNode?.style || { width: 380, height: 280 },
+          data: {
+            ...query,
+            onRemove: () => removeSavedQuery(query.id),
+            onReExecute: () => reExecuteSavedQuery(query.id),
+          },
+        });
       });
-    });
-    
-    // Add chart nodes
-    savedCharts.forEach((chart, index) => {
-      newNodes.push({
-        id: `chart-${chart.id}`,
-        type: 'chartNode',
-        position: { x: 50 + (index % 2) * 650, y: 50 + savedQueries.length * 350 + Math.floor(index / 2) * 450 },
-        style: { width: 500, height: 400 },
-        data: {
-          ...chart,
-          onRemove: () => removeSavedChart(chart.id),
-          onReExecute: () => reExecuteSavedChart(chart.id),
-        },
+      
+      // Add chart nodes
+      savedCharts.forEach((chart, index) => {
+        const existingNode = currentNodes.find(n => n.id === `chart-${chart.id}`);
+        newNodes.push({
+          id: `chart-${chart.id}`,
+          type: 'chartNode',
+          position: existingNode?.position || { x: 50 + (index % 2) * 650, y: 50 + savedQueries.length * 350 + Math.floor(index / 2) * 450 },
+          style: existingNode?.style || { width: 500, height: 400 },
+          data: {
+            ...chart,
+            onRemove: () => removeSavedChart(chart.id),
+            onReExecute: () => reExecuteSavedChart(chart.id),
+          },
+        });
       });
+      
+      return newNodes;
     });
-    
-    setNodes(newNodes);
-  }, [savedQueries, savedCharts, removeSavedQuery, removeSavedChart, reExecuteSavedQuery, reExecuteSavedChart, setNodes]);
+  }, [savedQueries, savedCharts, removeSavedQuery, removeSavedChart, reExecuteSavedQuery, reExecuteSavedChart]);
 
   useEffect(() => {
     if (selectedEnv) {
