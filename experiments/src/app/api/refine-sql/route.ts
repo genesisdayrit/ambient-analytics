@@ -35,10 +35,12 @@ const refineSQLLogic = traceable(
     let schemaInfo = "";
     if (schemaContext && schemaContext.length > 0) {
       schemaInfo = schemaContext.map((tableInfo: any) => {
+        // Handle both formats: { name, columns } and { table, columns }
+        const tableName = tableInfo.name || tableInfo.table;
         const cols = tableInfo.columns?.map((col: any) => 
           `    - ${col.name}: ${col.type} ${col.nullable ? 'NULL' : 'NOT NULL'}`
         ).join('\n') || '';
-        return `  ${schema}.${tableInfo.name}:\n${cols}`;
+        return `  ${schema}.${tableName}:\n${cols}`;
       }).join('\n\n');
     }
 

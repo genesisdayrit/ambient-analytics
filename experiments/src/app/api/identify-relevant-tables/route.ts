@@ -1,21 +1,19 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
+import { wrapOpenAI } from "langsmith/wrappers";
+import { traceable } from "langsmith/traceable";
 
-const openai = new OpenAI({
+const openai = wrapOpenAI(new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-});
+}));
 
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-    const { query, tables, conversationContext } = body;
-
-    if (!query || !tables || !Array.isArray(tables)) {
-      return NextResponse.json(
-        { error: "Query and tables array are required" },
-        { status: 400 }
-      );
-    }
+const identifyTablesLogic = traceable(
+  async (params: {
+    query: string;
+    tables: string[];
+    conversationContext?: any[];
+  }) => {
+    const { query, tables, conversationContext } = params;
 
     // Build conversation history if provided
     let conversationHistory = '';
@@ -84,8 +82,31 @@ Example format:
     // Validate that all returned tables exist in the provided list
     relevantTables = relevantTables.filter(table => tables.includes(table));
 
+    return { relevantTables };
+  },
+  { name: "identify_relevant_tables" }
+);
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const { query, tables, conversationContext } = body;
+
+    if (!query || !tables || !Array.isArray(tables)) {
+      return NextResponse.json(
+        { error: "Query and tables array are required" },
+        { status: 400 }
+      );
+    }
+
+    const result = await identifyTablesLogic({
+      query,
+      tables,
+      conversationContext,
+    });
+
     return NextResponse.json({
-      relevantTables,
+      relevantTables: result.relevantTables,
     });
   } catch (error) {
     console.error("Error identifying relevant tables:", error);

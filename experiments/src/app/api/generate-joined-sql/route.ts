@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
+import { wrapOpenAI } from "langsmith/wrappers";
+import { traceable } from "langsmith/traceable";
 
-const openai = new OpenAI({
+const openai = wrapOpenAI(new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-});
+}));
 
 interface Column {
   name: string;
@@ -18,17 +20,14 @@ interface TableWithColumns {
   columns: Column[];
 }
 
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-    const { env, schema, query, tablesWithColumns, conversationContext } = body;
-
-    if (!query || !tablesWithColumns || !Array.isArray(tablesWithColumns)) {
-      return NextResponse.json(
-        { error: "Query and tablesWithColumns array are required" },
-        { status: 400 }
-      );
-    }
+const generateJoinedSQLLogic = traceable(
+  async (params: {
+    schema: string;
+    query: string;
+    tablesWithColumns: TableWithColumns[];
+    conversationContext?: any[];
+  }) => {
+    const { schema, query, tablesWithColumns, conversationContext } = params;
 
     // Build the schema information for the prompt
     const schemaInfo = tablesWithColumns.map((twc: TableWithColumns) => {
@@ -104,8 +103,32 @@ Return ONLY the SQL query, without any explanation or markdown formatting. Do no
       cleanedSql = cleanedSql.trim() + ";";
     }
 
+    return { sql: cleanedSql };
+  },
+  { name: "generate_joined_sql" }
+);
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const { env, schema, query, tablesWithColumns, conversationContext } = body;
+
+    if (!query || !tablesWithColumns || !Array.isArray(tablesWithColumns)) {
+      return NextResponse.json(
+        { error: "Query and tablesWithColumns array are required" },
+        { status: 400 }
+      );
+    }
+
+    const result = await generateJoinedSQLLogic({
+      schema,
+      query,
+      tablesWithColumns,
+      conversationContext,
+    });
+
     return NextResponse.json({
-      sql: cleanedSql,
+      sql: result.sql,
     });
   } catch (error) {
     console.error("Error generating joined SQL:", error);

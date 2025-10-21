@@ -26,16 +26,30 @@ interface QueryResult {
   rowCount: number;
 }
 
+interface SQLEvaluation {
+  score: number;
+  summary: string;
+  strengths: string[];
+  issues: string[];
+  suggestions: string;
+}
+
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   relevantTables?: string[];
   sql?: string;
+  refinedSQL?: string;
+  refinedEvaluation?: SQLEvaluation;
+  refinedResult?: QueryResult;
+  evaluation?: SQLEvaluation;
   result?: QueryResult;
   interpretation?: string;
   error?: string;
   timestamp: Date;
+  userQuestion?: string; // Store the original question for refinement
+  tablesWithColumns?: TableWithColumns[]; // Store schema context for refinement
 }
 
 export default function JoinTables() {
@@ -54,7 +68,9 @@ export default function JoinTables() {
   const [fetchingColumns, setFetchingColumns] = useState(false);
   const [generatingSQL, setGeneratingSQL] = useState(false);
   const [executingSQL, setExecutingSQL] = useState(false);
+  const [evaluating, setEvaluating] = useState(false);
   const [generatingInterpretation, setGeneratingInterpretation] = useState(false);
+  const [refiningSQL, setRefiningSQL] = useState<string | null>(null); // messageId being refined
 
   useEffect(() => {
     if (selectedEnv) {
@@ -136,10 +152,12 @@ export default function JoinTables() {
       return;
     }
 
+    const userQuestion = currentInput; // Store for later use
+    
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: currentInput,
+      content: userQuestion,
       timestamp: new Date(),
     };
 
@@ -153,6 +171,7 @@ export default function JoinTables() {
       role: 'assistant',
       content: '',
       timestamp: new Date(),
+      userQuestion, // Store the question for refinement
     };
     setMessages(prev => [...prev, assistantMessage]);
 
@@ -179,7 +198,7 @@ export default function JoinTables() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          query: currentInput,
+          query: userQuestion,
           tables: tables.map(t => t.name),
           conversationContext,
         }),
@@ -250,6 +269,13 @@ export default function JoinTables() {
       });
 
       tablesWithColumns = await Promise.all(columnPromises);
+      
+      // Store tablesWithColumns in the message for refinement
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, tablesWithColumns } 
+          : msg
+      ));
     } catch (err) {
       setMessages(prev => prev.map(msg => 
         msg.id === assistantMessageId 
@@ -276,7 +302,7 @@ export default function JoinTables() {
         body: JSON.stringify({
           env: selectedEnv,
           schema: selectedSchema,
-          query: currentInput,
+          query: userQuestion,
           tablesWithColumns,
           conversationContext,
         }),
@@ -311,6 +337,7 @@ export default function JoinTables() {
     // Step 4: Execute SQL
     setExecutingSQL(true);
     let result: QueryResult | undefined = undefined;
+    let executionError: string | null = null;
     
     try {
       const response = await fetch("/api/execute-sql", {
@@ -331,37 +358,72 @@ export default function JoinTables() {
       const data = await response.json();
       
       if (data.error) {
+        executionError = data.error;
         setMessages(prev => prev.map(msg => 
           msg.id === assistantMessageId 
             ? { ...msg, error: data.error } 
             : msg
         ));
-        setExecutingSQL(false);
-        return;
+      } else {
+        result = data.result;
+        
+        // Update assistant message with result
+        setMessages(prev => prev.map(msg => 
+          msg.id === assistantMessageId 
+            ? { ...msg, result: result } 
+            : msg
+        ));
       }
-      
-      result = data.result;
-      
-      // Update assistant message with result
-      setMessages(prev => prev.map(msg => 
-        msg.id === assistantMessageId 
-          ? { ...msg, result: result } 
-          : msg
-      ));
     } catch (err) {
+      executionError = "Failed to execute SQL";
       setMessages(prev => prev.map(msg => 
         msg.id === assistantMessageId 
-          ? { ...msg, error: "Failed to execute SQL" } 
+          ? { ...msg, error: executionError! } 
           : msg
       ));
       console.error(err);
-      setExecutingSQL(false);
-      return;
     }
     
     setExecutingSQL(false);
 
-    // Step 5: Generate interpretation
+    // Step 5: Evaluate SQL Quality
+    setEvaluating(true);
+    let evaluation: SQLEvaluation | undefined = undefined;
+    
+    try {
+      const response = await fetch("/api/evaluate-sql-query", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: userQuestion,
+          generatedSQL: sql,
+          schema: selectedSchema,
+          tables: tablesWithColumns.map(twc => ({ name: twc.table, columns: twc.columns })),
+          executionSuccess: !executionError,
+          executionError,
+          executionResult: result,
+        }),
+      });
+
+      if (!response.ok) throw new Error("Failed to evaluate SQL");
+
+      const data = await response.json();
+      evaluation = data.evaluation;
+      
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, evaluation } 
+          : msg
+      ));
+    } catch (err) {
+      console.error("Evaluation error:", err);
+    }
+    
+    setEvaluating(false);
+
+    // Step 6: Generate interpretation
     if (result) {
       setGeneratingInterpretation(true);
       
@@ -372,7 +434,7 @@ export default function JoinTables() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            naturalLanguageQuery: currentInput,
+            naturalLanguageQuery: userQuestion,
             sql,
             result,
             conversationContext,
@@ -397,6 +459,99 @@ export default function JoinTables() {
         setGeneratingInterpretation(false);
       }
     }
+  };
+
+  const refineSQL = async (messageId: string) => {
+    const message = messages.find(m => m.id === messageId);
+    if (!message || !message.sql || !message.evaluation || !message.userQuestion || !message.tablesWithColumns) {
+      console.error("Cannot refine: missing required data");
+      return;
+    }
+
+    setRefiningSQL(messageId);
+
+    try {
+      // Call the refinement API
+      const response = await fetch("/api/refine-sql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: message.userQuestion,
+          originalSQL: message.sql,
+          evaluation: message.evaluation,
+          executionResult: message.result,
+          schema: selectedSchema,
+          schemaContext: message.tablesWithColumns,
+        }),
+      });
+
+      if (!response.ok) throw new Error("Failed to refine SQL");
+
+      const data = await response.json();
+      const refinedSQL = data.refinedSQL;
+
+      // Update message with refined SQL
+      setMessages(prev => prev.map(msg => 
+        msg.id === messageId ? { ...msg, refinedSQL } : msg
+      ));
+
+      // Execute the refined SQL
+      try {
+        const execResponse = await fetch("/api/execute-sql", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ env: selectedEnv, sql: refinedSQL }),
+        });
+
+        if (!execResponse.ok) throw new Error("Failed to execute refined SQL");
+
+        const execData = await execResponse.json();
+        
+        if (execData.error) {
+          setMessages(prev => prev.map(msg => 
+            msg.id === messageId ? { ...msg, refinedResult: { columns: [], rows: [], rowCount: 0 } } : msg
+          ));
+        } else {
+          setMessages(prev => prev.map(msg => 
+            msg.id === messageId ? { ...msg, refinedResult: execData.result } : msg
+          ));
+
+          // Evaluate the refined SQL
+          const evalResponse = await fetch("/api/evaluate-sql-query", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              question: message.userQuestion,
+              generatedSQL: refinedSQL,
+              schema: selectedSchema,
+              tables: message.tablesWithColumns.map(twc => ({ name: twc.table, columns: twc.columns })),
+              executionSuccess: true,
+              executionResult: execData.result,
+            }),
+          });
+
+          if (evalResponse.ok) {
+            const evalData = await evalResponse.json();
+            setMessages(prev => prev.map(msg => 
+              msg.id === messageId ? { ...msg, refinedEvaluation: evalData.evaluation } : msg
+            ));
+          }
+        }
+      } catch (err) {
+        console.error("Error executing refined SQL:", err);
+      }
+    } catch (err) {
+      console.error("Error refining SQL:", err);
+    } finally {
+      setRefiningSQL(null);
+    }
+  };
+
+  const getScoreColor = (score: number) => {
+    if (score >= 0.9) return "text-green-600 dark:text-green-400";
+    if (score >= 0.7) return "text-blue-600 dark:text-blue-400";
+    if (score >= 0.4) return "text-yellow-600 dark:text-yellow-400";
+    return "text-red-600 dark:text-red-400";
   };
 
   return (
@@ -618,6 +773,123 @@ export default function JoinTables() {
                                 </div>
                               )}
                               
+                              {message.evaluation && (
+                                <div className="border-t border-gray-300 dark:border-gray-700 pt-2">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-xs font-semibold text-gray-600 dark:text-gray-400">
+                                        SQL Quality:
+                                      </p>
+                                      <span className={`text-sm font-bold ${getScoreColor(message.evaluation.score)}`}>
+                                        {(message.evaluation.score * 100).toFixed(0)}%
+                                      </span>
+                                    </div>
+                                    {message.evaluation.score < 0.9 && message.userQuestion && message.sql && !message.refinedSQL && (
+                                      <button
+                                        onClick={() => refineSQL(message.id)}
+                                        disabled={refiningSQL === message.id}
+                                        className="px-3 py-1 text-xs bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                                      >
+                                        {refiningSQL === message.id ? 'Refining...' : '🔧 Refine SQL'}
+                                      </button>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">{message.evaluation.summary}</p>
+                                  {message.evaluation.strengths.length > 0 && (
+                                    <div className="mb-2">
+                                      <p className="text-xs font-semibold text-green-600 dark:text-green-400">Strengths:</p>
+                                      <ul className="text-xs text-gray-600 dark:text-gray-400 list-disc list-inside">
+                                        {message.evaluation.strengths.map((s, i) => <li key={i}>{s}</li>)}
+                                      </ul>
+                                    </div>
+                                  )}
+                                  {message.evaluation.issues.length > 0 && (
+                                    <div className="mb-2">
+                                      <p className="text-xs font-semibold text-orange-600 dark:text-orange-400">Issues:</p>
+                                      <ul className="text-xs text-gray-600 dark:text-gray-400 list-disc list-inside">
+                                        {message.evaluation.issues.map((i, idx) => <li key={idx}>{i}</li>)}
+                                      </ul>
+                                    </div>
+                                  )}
+                                  {message.evaluation.suggestions && (
+                                    <div>
+                                      <p className="text-xs font-semibold text-blue-600 dark:text-blue-400">Suggestions:</p>
+                                      <p className="text-xs text-gray-600 dark:text-gray-400">{message.evaluation.suggestions}</p>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {message.refinedSQL && (
+                                <div className="border-t border-gray-300 dark:border-gray-700 pt-3 mt-3">
+                                  <div className="bg-purple-50 dark:bg-purple-950 border border-purple-200 dark:border-purple-800 rounded-lg p-3">
+                                    <p className="text-xs font-semibold text-purple-700 dark:text-purple-300 mb-2">
+                                      🔧 Refined SQL
+                                    </p>
+                                    <pre className="text-xs font-mono bg-white dark:bg-gray-900 p-2 rounded overflow-x-auto mb-2">
+                                      {message.refinedSQL}
+                                    </pre>
+                                    
+                                    {message.refinedEvaluation && (
+                                      <div className="mb-2">
+                                        <div className="flex items-center gap-2 mb-1">
+                                          <p className="text-xs font-semibold text-gray-600 dark:text-gray-400">
+                                            Refined Quality:
+                                          </p>
+                                          <span className={`text-sm font-bold ${getScoreColor(message.refinedEvaluation.score)}`}>
+                                            {(message.refinedEvaluation.score * 100).toFixed(0)}%
+                                          </span>
+                                          {message.evaluation && message.refinedEvaluation.score > message.evaluation.score && (
+                                            <span className="text-xs text-green-600 dark:text-green-400">
+                                              ↑ +{((message.refinedEvaluation.score - message.evaluation.score) * 100).toFixed(0)}%
+                                            </span>
+                                          )}
+                                        </div>
+                                        <p className="text-xs text-gray-600 dark:text-gray-400">{message.refinedEvaluation.summary}</p>
+                                      </div>
+                                    )}
+
+                                    {message.refinedResult && message.refinedResult.rowCount > 0 && (
+                                      <div>
+                                        <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">
+                                          Refined Results ({message.refinedResult.rowCount} rows)
+                                        </p>
+                                        <div className="border border-gray-300 dark:border-gray-700 rounded overflow-x-auto max-h-48">
+                                          <table className="w-full text-xs">
+                                            <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
+                                              <tr>
+                                                {message.refinedResult.columns.map((col) => (
+                                                  <th key={col} className="px-2 py-1 text-left font-medium whitespace-nowrap">
+                                                    {col}
+                                                  </th>
+                                                ))}
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                                              {message.refinedResult.rows.slice(0, 5).map((row, idx) => (
+                                                <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                                                  {message.refinedResult!.columns.map((col) => (
+                                                    <td key={col} className="px-2 py-1 font-mono whitespace-nowrap">
+                                                      {row[col] === null ? (
+                                                        <span className="text-gray-400 italic">null</span>
+                                                      ) : typeof row[col] === 'object' ? (
+                                                        JSON.stringify(row[col])
+                                                      ) : (
+                                                        String(row[col])
+                                                      )}
+                                                    </td>
+                                                  ))}
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                              
                               {message.interpretation && (
                                 <div className="border-t border-gray-300 dark:border-gray-700 pt-2">
                                   <p className="text-sm leading-relaxed">{message.interpretation}</p>
@@ -676,7 +948,18 @@ export default function JoinTables() {
                   </div>
                 )}
                 
-                {generatingInterpretation && !executingSQL && !generatingSQL && !fetchingColumns && !identifyingTables && (
+                {evaluating && !executingSQL && !generatingSQL && !fetchingColumns && !identifyingTables && (
+                  <div className="text-left">
+                    <div className="inline-block bg-gray-100 dark:bg-gray-800 px-4 py-3 rounded-lg">
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm">Evaluating SQL quality...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {generatingInterpretation && !evaluating && !executingSQL && !generatingSQL && !fetchingColumns && !identifyingTables && (
                   <div className="text-left">
                     <div className="inline-block bg-gray-100 dark:bg-gray-800 px-4 py-3 rounded-lg">
                       <div className="flex items-center gap-2">
@@ -702,11 +985,11 @@ export default function JoinTables() {
                   }}
                   placeholder="Ask a question that requires joining tables..."
                   className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  disabled={identifyingTables || fetchingColumns || generatingSQL || executingSQL || generatingInterpretation}
+                  disabled={identifyingTables || fetchingColumns || generatingSQL || executingSQL || evaluating || generatingInterpretation}
                 />
                 <button
                   onClick={sendMessage}
-                  disabled={!currentInput.trim() || identifyingTables || fetchingColumns || generatingSQL || executingSQL || generatingInterpretation}
+                  disabled={!currentInput.trim() || identifyingTables || fetchingColumns || generatingSQL || executingSQL || evaluating || generatingInterpretation}
                   className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
                 >
                   Send
