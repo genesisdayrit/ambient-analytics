@@ -12,6 +12,8 @@ import ReactFlow, {
   NodeTypes,
   BackgroundVariant,
   NodeResizer,
+  ReactFlowProvider,
+  useReactFlow,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
@@ -239,6 +241,45 @@ const nodeTypes: NodeTypes = {
   queryNode: QueryNode,
   chartNode: ChartNode,
 };
+
+// Flow Canvas Component (uses ReactFlow hooks)
+function FlowCanvas({ 
+  nodes, 
+  edges, 
+  onNodesChange, 
+  onEdgesChange 
+}: { 
+  nodes: Node[]; 
+  edges: Edge[]; 
+  onNodesChange: any; 
+  onEdgesChange: any;
+}) {
+  const { fitView } = useReactFlow();
+
+  const handleNodeDoubleClick = useCallback((event: React.MouseEvent, node: Node) => {
+    fitView({
+      nodes: [node],
+      duration: 300,
+      padding: 0.3,
+    });
+  }, [fitView]);
+
+  return (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      onNodesChange={onNodesChange}
+      onEdgesChange={onEdgesChange}
+      onNodeDoubleClick={handleNodeDoubleClick}
+      nodeTypes={nodeTypes}
+      fitView
+      className="bg-gradient-to-br from-blue-50 to-purple-50 dark:from-gray-900 dark:to-gray-800"
+    >
+      <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
+      <Controls />
+    </ReactFlow>
+  );
+}
 
 export default function DashboardCreator() {
   const [selectedEnv, setSelectedEnv] = useState("");
@@ -1050,22 +1091,18 @@ export default function DashboardCreator() {
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-2xl font-semibold">Dashboard Canvas</h2>
                 <div className="text-sm text-gray-600 dark:text-gray-400">
-                  💡 Drag to move, resize handles appear when selected
+                  💡 Drag to move • Resize when selected • Double-click to focus
                 </div>
               </div>
               <div className="border-2 border-blue-300 dark:border-blue-700 rounded-lg overflow-hidden" style={{ height: '600px' }}>
-                <ReactFlow
-                  nodes={nodes}
-                  edges={edges}
-                  onNodesChange={onNodesChange}
-                  onEdgesChange={onEdgesChange}
-                  nodeTypes={nodeTypes}
-                  fitView
-                  className="bg-gradient-to-br from-blue-50 to-purple-50 dark:from-gray-900 dark:to-gray-800"
-                >
-                  <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
-                  <Controls />
-                </ReactFlow>
+                <ReactFlowProvider>
+                  <FlowCanvas
+                    nodes={nodes}
+                    edges={edges}
+                    onNodesChange={onNodesChange}
+                    onEdgesChange={onEdgesChange}
+                  />
+                </ReactFlowProvider>
               </div>
             </div>
           )}
