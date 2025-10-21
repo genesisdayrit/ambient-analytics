@@ -9,6 +9,7 @@ const experiments = [
   { id: 6, title: "join tables", href: "/experiments/join-tables" },
   { id: 7, title: "langsmith evaluations", href: "/experiments/langsmith-evaluations" },
   { id: 8, title: "sql chat with ai evaluation", href: "/experiments/sql-with-evaluation" },
+  { id: 9, title: "dashboard creator", href: "/experiments/dashboard-creator" },
 ];
 
 export default function Experiments() {
