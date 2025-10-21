@@ -80,6 +80,8 @@ export default function JoinTables() {
   const [generatingInterpretation, setGeneratingInterpretation] = useState(false);
   const [refiningSQL, setRefiningSQL] = useState<string | null>(null); // messageId being refined
   const [generatingChart, setGeneratingChart] = useState<string | null>(null); // messageId generating chart for
+  const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set());
+  const [tableColumns, setTableColumns] = useState<Map<string, Column[]>>(new Map());
 
   useEffect(() => {
     if (selectedEnv) {
@@ -563,6 +565,40 @@ export default function JoinTables() {
     return "text-red-600 dark:text-red-400";
   };
 
+  const toggleTableExpanded = async (tableName: string) => {
+    const newExpanded = new Set(expandedTables);
+    if (newExpanded.has(tableName)) {
+      newExpanded.delete(tableName);
+    } else {
+      newExpanded.add(tableName);
+      
+      // Fetch columns if we don't have them yet
+      if (!tableColumns.has(tableName)) {
+        try {
+          const response = await fetch("/api/columns", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ 
+              env: selectedEnv, 
+              schema: selectedSchema, 
+              table: tableName 
+            }),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            setTableColumns(prev => new Map(prev).set(tableName, data.columns || []));
+          }
+        } catch (err) {
+          console.error(`Error fetching columns for ${tableName}:`, err);
+        }
+      }
+    }
+    setExpandedTables(newExpanded);
+  };
+
   const generateChart = async (messageId: string, useRefined: boolean = false) => {
     const message = messages.find(m => m.id === messageId);
     if (!message) return;
@@ -679,24 +715,86 @@ export default function JoinTables() {
               )}
               
               {!loadingTables && !tablesError && tables.length > 0 && (
-                <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden mb-8">
-                  <div className="bg-gray-50 dark:bg-gray-800 px-4 py-3">
-                    <p className="text-sm text-gray-600 dark:text-gray-400">
-                      {tables.length} tables available in this schema
-                    </p>
-                  </div>
-                  <div className="max-h-40 overflow-y-auto">
-                    <div className="px-4 py-2 flex flex-wrap gap-2">
-                      {tables.map((table) => (
-                        <span 
-                          key={table.name}
-                          className="inline-block px-3 py-1 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded text-xs font-mono"
-                        >
-                          {table.name}
-                        </span>
-                      ))}
+                <div className="mb-8">
+                  <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
+                    <div className="bg-gray-50 dark:bg-gray-800 px-4 py-3">
+                      <p className="text-sm text-gray-600 dark:text-gray-400">
+                        {tables.length} tables available in this schema (click a table to view columns)
+                      </p>
+                    </div>
+                    <div className="max-h-40 overflow-y-auto">
+                      <div className="px-4 py-2 flex flex-wrap gap-2">
+                        {tables.map((table) => (
+                          <button
+                            key={table.name}
+                            onClick={() => toggleTableExpanded(table.name)}
+                            className={`inline-block px-3 py-1 border rounded text-xs font-mono transition-colors cursor-pointer ${
+                              expandedTables.has(table.name)
+                                ? 'bg-blue-100 dark:bg-blue-900 border-blue-400 dark:border-blue-600'
+                                : 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600'
+                            }`}
+                          >
+                            {table.name}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
+                  
+                  {/* Expanded table schemas */}
+                  {Array.from(expandedTables).map((tableName) => (
+                    <div key={tableName} className="mt-4 border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
+                      <div className="bg-gray-50 dark:bg-gray-800 px-4 py-2 flex items-center justify-between">
+                        <span className="text-sm font-mono font-semibold">{tableName}</span>
+                        <button
+                          onClick={() => toggleTableExpanded(tableName)}
+                          className="text-xs text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
+                        >
+                          ✕ Close
+                        </button>
+                      </div>
+                      <div className="p-4">
+                        {tableColumns.has(tableName) ? (
+                          <div className="border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
+                            <table className="w-full text-xs">
+                              <thead className="bg-gray-100 dark:bg-gray-800">
+                                <tr>
+                                  <th className="px-3 py-2 text-left font-medium">Column Name</th>
+                                  <th className="px-3 py-2 text-left font-medium">Data Type</th>
+                                  <th className="px-3 py-2 text-left font-medium">Nullable</th>
+                                  <th className="px-3 py-2 text-left font-medium">Default</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-950">
+                                {tableColumns.get(tableName)!.map((column) => (
+                                  <tr key={column.name} className="hover:bg-gray-50 dark:hover:bg-gray-900">
+                                    <td className="px-3 py-2 font-mono">{column.name}</td>
+                                    <td className="px-3 py-2">
+                                      {column.type}
+                                      {column.maxLength && <span className="text-gray-500">({column.maxLength})</span>}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      <span className={column.nullable ? "text-gray-600 dark:text-gray-400" : "text-red-600 dark:text-red-400"}>
+                                        {column.nullable ? "YES" : "NO"}
+                                      </span>
+                                    </td>
+                                    <td className="px-3 py-2 text-gray-600 dark:text-gray-400 font-mono text-xs">
+                                      {column.default || "-"}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 py-2 text-gray-500">
+                            <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                            <span className="text-xs">Loading columns...</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
               
