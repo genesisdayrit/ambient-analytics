@@ -11,7 +11,8 @@ export async function POST(request: Request) {
       schema,
       tables,
       executionSuccess = true,
-      executionError = null
+      executionError = null,
+      executionResult = null
     } = body;
 
     if (!question || !generatedSQL) {
@@ -36,6 +37,21 @@ export async function POST(request: Request) {
       }).join('\n\n');
     }
 
+    // Build execution result context
+    let executionContext = "";
+    if (executionResult && executionSuccess) {
+      executionContext = `
+
+Actual Query Results:
+- Rows returned: ${executionResult.rowCount || 0}
+- Columns: ${executionResult.columns?.join(', ') || 'N/A'}
+${executionResult.rows && executionResult.rows.length > 0 ? `
+- Sample data (first 3 rows):
+${JSON.stringify(executionResult.rows.slice(0, 3), null, 2)}
+
+IMPORTANT: Verify that these results actually answer the user's question. Check if the data, column names, and row count make sense for what was asked.` : ''}`;
+    }
+
     const evaluationPrompt = `You are an expert SQL evaluator. Evaluate the quality of a PostgreSQL query generated from a natural language question.
 
 Consider the following criteria:
@@ -44,7 +60,8 @@ Consider the following criteria:
 3. **Schema Usage**: Does it correctly use the provided schema (tables, columns, joins)?
 4. **Best Practices**: Does it follow SQL best practices (proper JOINs, qualified table names, etc.)?
 5. **Completeness**: Does it fully address the user's question?
-6. **Execution**: ${executionSuccess ? 'The query executed successfully.' : `The query failed to execute with error: ${executionError}`}
+6. **Result Accuracy**: ${executionResult ? 'Do the actual results make sense for the question?' : 'No execution results available yet.'}
+7. **Execution**: ${executionSuccess ? 'The query executed successfully.' : `The query failed to execute with error: ${executionError}`}
 
 User's Question: "${question}"
 
@@ -53,6 +70,7 @@ ${schemaContext}` : ''}
 
 Generated SQL:
 ${generatedSQL}
+${executionContext}
 
 Provide a score from 0.0 to 1.0 where:
 - 1.0 = Perfect, production-ready SQL

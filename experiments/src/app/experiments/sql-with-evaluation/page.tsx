@@ -39,11 +39,15 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   sql?: string;
+  refinedSQL?: string;
+  refinedEvaluation?: SQLEvaluation;
+  refinedResult?: QueryResult;
   evaluation?: SQLEvaluation;
   result?: QueryResult;
   interpretation?: string;
   error?: string;
   timestamp: Date;
+  userQuestion?: string; // Store the original question for refinement
 }
 
 export default function SQLWithEvaluation() {
@@ -61,6 +65,7 @@ export default function SQLWithEvaluation() {
   const [evaluating, setEvaluating] = useState(false);
   const [executingSQL, setExecutingSQL] = useState(false);
   const [generatingInterpretation, setGeneratingInterpretation] = useState(false);
+  const [refiningSQL, setRefiningSQL] = useState<string | null>(null); // messageId being refined
 
   useEffect(() => {
     if (selectedEnv) {
@@ -158,15 +163,15 @@ export default function SQLWithEvaluation() {
   const sendMessage = async () => {
     if (!currentInput.trim()) return;
 
+    const userQuestion = currentInput;
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: currentInput,
+      content: userQuestion,
       timestamp: new Date(),
     };
 
     setMessages(prev => [...prev, userMessage]);
-    const userQuestion = currentInput;
     setCurrentInput("");
 
     const assistantMessageId = (Date.now() + 1).toString();
@@ -174,6 +179,7 @@ export default function SQLWithEvaluation() {
       id: assistantMessageId,
       role: 'assistant',
       content: '',
+      userQuestion, // Store for refinement
       timestamp: new Date(),
     };
     setMessages(prev => [...prev, assistantMessage]);
@@ -226,38 +232,7 @@ export default function SQLWithEvaluation() {
     
     setGeneratingSQL(false);
 
-    // Step 2: Evaluate SQL Quality
-    setEvaluating(true);
-    let evaluation: SQLEvaluation | undefined = undefined;
-    
-    try {
-      const response = await fetch("/api/evaluate-sql-query", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question: userQuestion,
-          generatedSQL: sql,
-          schema: selectedSchema,
-          tables: [{ name: selectedTable, columns }],
-          executionSuccess: true,
-        }),
-      });
-
-      if (!response.ok) throw new Error("Failed to evaluate SQL");
-
-      const data = await response.json();
-      evaluation = data.evaluation;
-      
-      setMessages(prev => prev.map(msg => 
-        msg.id === assistantMessageId ? { ...msg, evaluation } : msg
-      ));
-    } catch (err) {
-      console.error("Evaluation error:", err);
-    }
-    
-    setEvaluating(false);
-
-    // Step 3: Execute SQL
+    // Step 2: Execute SQL (do this before evaluation so we can pass results)
     setExecutingSQL(true);
     let result: QueryResult | undefined = undefined;
     let executionError: string | null = null;
@@ -278,28 +253,56 @@ export default function SQLWithEvaluation() {
         setMessages(prev => prev.map(msg => 
           msg.id === assistantMessageId ? { ...msg, error: data.error } : msg
         ));
-        setExecutingSQL(false);
-        return;
+      } else {
+        result = data.result;
+        setMessages(prev => prev.map(msg => 
+          msg.id === assistantMessageId ? { ...msg, result } : msg
+        ));
       }
-      
-      result = data.result;
-      
-      setMessages(prev => prev.map(msg => 
-        msg.id === assistantMessageId ? { ...msg, result } : msg
-      ));
     } catch (err) {
       executionError = "Failed to execute SQL";
       setMessages(prev => prev.map(msg => 
         msg.id === assistantMessageId ? { ...msg, error: executionError! } : msg
       ));
       console.error(err);
-      setExecutingSQL(false);
-      return;
     }
     
     setExecutingSQL(false);
 
-    // Step 4: Generate interpretation
+    // Step 3: Evaluate SQL Quality (with execution results)
+    setEvaluating(true);
+    let evaluation: SQLEvaluation | undefined = undefined;
+    
+    try {
+      const response = await fetch("/api/evaluate-sql-query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: userQuestion,
+          generatedSQL: sql,
+          schema: selectedSchema,
+          tables: [{ name: selectedTable, columns }],
+          executionSuccess: !executionError,
+          executionError,
+          executionResult: result, // Pass actual results
+        }),
+      });
+
+      if (!response.ok) throw new Error("Failed to evaluate SQL");
+
+      const data = await response.json();
+      evaluation = data.evaluation;
+      
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId ? { ...msg, evaluation } : msg
+      ));
+    } catch (err) {
+      console.error("Evaluation error:", err);
+    }
+    
+    setEvaluating(false);
+
+    // Step 4: Generate interpretation (if we have results)
     if (result) {
       setGeneratingInterpretation(true);
       
@@ -327,6 +330,92 @@ export default function SQLWithEvaluation() {
       }
       
       setGeneratingInterpretation(false);
+    }
+  };
+
+  const refineSQL = async (messageId: string) => {
+    const message = messages.find(m => m.id === messageId);
+    if (!message || !message.sql || !message.evaluation || !message.userQuestion) {
+      console.error("Cannot refine: missing required data");
+      return;
+    }
+
+    setRefiningSQL(messageId);
+
+    try {
+      // Call the refinement API
+      const response = await fetch("/api/refine-sql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: message.userQuestion,
+          originalSQL: message.sql,
+          evaluation: message.evaluation,
+          executionResult: message.result,
+          schema: selectedSchema,
+          schemaContext: [{ name: selectedTable, columns }],
+        }),
+      });
+
+      if (!response.ok) throw new Error("Failed to refine SQL");
+
+      const data = await response.json();
+      const refinedSQL = data.refinedSQL;
+
+      // Update message with refined SQL
+      setMessages(prev => prev.map(msg => 
+        msg.id === messageId ? { ...msg, refinedSQL } : msg
+      ));
+
+      // Execute the refined SQL
+      try {
+        const execResponse = await fetch("/api/execute-sql", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ env: selectedEnv, sql: refinedSQL }),
+        });
+
+        if (!execResponse.ok) throw new Error("Failed to execute refined SQL");
+
+        const execData = await execResponse.json();
+        
+        if (execData.error) {
+          setMessages(prev => prev.map(msg => 
+            msg.id === messageId ? { ...msg, refinedResult: { columns: [], rows: [], rowCount: 0 } } : msg
+          ));
+        } else {
+          setMessages(prev => prev.map(msg => 
+            msg.id === messageId ? { ...msg, refinedResult: execData.result } : msg
+          ));
+
+          // Evaluate the refined SQL
+          const evalResponse = await fetch("/api/evaluate-sql-query", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              question: message.userQuestion,
+              generatedSQL: refinedSQL,
+              schema: selectedSchema,
+              tables: [{ name: selectedTable, columns }],
+              executionSuccess: true,
+              executionResult: execData.result,
+            }),
+          });
+
+          if (evalResponse.ok) {
+            const evalData = await evalResponse.json();
+            setMessages(prev => prev.map(msg => 
+              msg.id === messageId ? { ...msg, refinedEvaluation: evalData.evaluation } : msg
+            ));
+          }
+        }
+      } catch (err) {
+        console.error("Error executing refined SQL:", err);
+      }
+    } catch (err) {
+      console.error("Error refining SQL:", err);
+    } finally {
+      setRefiningSQL(null);
     }
   };
 
@@ -499,10 +588,96 @@ export default function SQLWithEvaluation() {
                               <p className="text-xs text-gray-700 dark:text-gray-300">{message.evaluation.suggestions}</p>
                             </div>
                           )}
+
+                          {/* Improve SQL Button */}
+                          {message.evaluation.score < 0.9 && !message.refinedSQL && (
+                            <div className="mt-3 pt-3 border-t border-gray-300 dark:border-gray-600">
+                              <button
+                                onClick={() => refineSQL(message.id)}
+                                disabled={refiningSQL === message.id}
+                                className="w-full px-4 py-2 bg-gradient-to-r from-purple-500 to-indigo-500 text-white rounded-lg hover:from-purple-600 hover:to-indigo-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium text-sm"
+                              >
+                                {refiningSQL === message.id ? 'Improving SQL...' : '✨ Improve SQL Automatically'}
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )}
 
-                      {/* Query Results */}
+                      {/* Refined SQL Comparison */}
+                      {message.refinedSQL && (
+                        <div className="border-2 border-purple-300 dark:border-purple-700 rounded-lg p-4 bg-purple-50 dark:bg-purple-900/20">
+                          <div className="flex items-center gap-2 mb-3">
+                            <span className="text-lg">✨</span>
+                            <span className="text-sm font-bold text-purple-700 dark:text-purple-300">Improved Version</span>
+                            {message.refinedEvaluation && (
+                              <span className={`ml-auto text-xl font-bold ${getScoreColor(message.refinedEvaluation.score)}`}>
+                                {(message.refinedEvaluation.score * 100).toFixed(0)}%
+                                {message.evaluation && message.refinedEvaluation.score > message.evaluation.score && (
+                                  <span className="text-sm ml-2 text-green-600 dark:text-green-400">
+                                    (+{((message.refinedEvaluation.score - message.evaluation.score) * 100).toFixed(0)}%)
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                          </div>
+
+                          <pre className="text-sm bg-gray-900 text-gray-100 p-3 rounded overflow-x-auto mb-3">
+                            <code>{message.refinedSQL}</code>
+                          </pre>
+
+                          {message.refinedEvaluation && (
+                            <div className="text-xs space-y-2">
+                              {message.refinedEvaluation.summary && (
+                                <p className="text-gray-700 dark:text-gray-300">{message.refinedEvaluation.summary}</p>
+                              )}
+                              {message.refinedEvaluation.strengths.length > 0 && (
+                                <div>
+                                  <p className="font-semibold text-green-700 dark:text-green-300">Improvements:</p>
+                                  <ul className="space-y-1 mt-1">
+                                    {message.refinedEvaluation.strengths.map((strength, i) => (
+                                      <li key={i} className="flex items-start">
+                                        <span className="text-green-600 dark:text-green-400 mr-2">✓</span>
+                                        <span>{strength}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {message.refinedResult && (
+                            <div className="mt-3 pt-3 border-t border-purple-300 dark:border-purple-700">
+                              <p className="text-xs font-semibold mb-2">Refined Query Results ({message.refinedResult.rowCount} rows)</p>
+                              <div className="overflow-x-auto max-h-60 overflow-y-auto">
+                                <table className="min-w-full text-xs">
+                                  <thead className="bg-gray-100 dark:bg-gray-700 sticky top-0">
+                                    <tr>
+                                      {message.refinedResult.columns.map((col) => (
+                                        <th key={col} className="px-3 py-2 text-left font-semibold">{col}</th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {message.refinedResult.rows.slice(0, 5).map((row, i) => (
+                                      <tr key={i} className="border-t border-gray-200 dark:border-gray-700">
+                                        {message.refinedResult!.columns.map((col) => (
+                                          <td key={col} className="px-3 py-2">
+                                            {row[col] != null ? String(row[col]) : <span className="text-gray-400">null</span>}
+                                          </td>
+                                        ))}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Original Query Results */}
                       {message.result && (
                         <div className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-800">
                           <div className="flex items-center justify-between mb-2">
