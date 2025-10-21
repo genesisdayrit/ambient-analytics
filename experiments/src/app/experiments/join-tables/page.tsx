@@ -1,8 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { ReactFlow, Node, Edge, Background, Controls, MiniMap, Handle, Position, NodeProps } from 'reactflow';
-import 'reactflow/dist/style.css';
+import { useState, useEffect } from "react";
 
 interface Table {
   name: string;
@@ -19,29 +17,25 @@ interface Column {
 
 interface TableWithColumns {
   table: string;
-  type: string;
   columns: Column[];
 }
 
-interface ForeignKey {
-  fromTable: string;
-  fromColumn: string;
-  toTable: string;
-  toColumn: string;
-  constraintName: string;
+interface QueryResult {
+  columns: string[];
+  rows: Record<string, any>[];
+  rowCount: number;
 }
 
-interface TableClassification {
-  tableName: string;
-  type: 'fact' | 'dimension' | 'bridge';
-  reasoning: string;
-}
-
-interface OptimizedLayout {
-  classifications: TableClassification[];
-  positions: {
-    [tableName: string]: { x: number; y: number };
-  };
+interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  relevantTables?: string[];
+  sql?: string;
+  result?: QueryResult;
+  interpretation?: string;
+  error?: string;
+  timestamp: Date;
 }
 
 export default function JoinTables() {
@@ -49,15 +43,18 @@ export default function JoinTables() {
   const [schemas, setSchemas] = useState<string[]>([]);
   const [selectedSchema, setSelectedSchema] = useState("");
   const [tables, setTables] = useState<Table[]>([]);
-  const [tablesWithColumns, setTablesWithColumns] = useState<TableWithColumns[]>([]);
-  const [foreignKeys, setForeignKeys] = useState<ForeignKey[]>([]);
-  const [optimizedLayout, setOptimizedLayout] = useState<OptimizedLayout | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [currentInput, setCurrentInput] = useState("");
+  const [expandedResults, setExpandedResults] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [loadingTables, setLoadingTables] = useState(false);
-  const [loadingColumns, setLoadingColumns] = useState(false);
-  const [optimizingLayout, setOptimizingLayout] = useState(false);
   const [error, setError] = useState("");
   const [tablesError, setTablesError] = useState("");
+  const [identifyingTables, setIdentifyingTables] = useState(false);
+  const [fetchingColumns, setFetchingColumns] = useState(false);
+  const [generatingSQL, setGeneratingSQL] = useState(false);
+  const [executingSQL, setExecutingSQL] = useState(false);
+  const [generatingInterpretation, setGeneratingInterpretation] = useState(false);
 
   useEffect(() => {
     if (selectedEnv) {
@@ -66,6 +63,7 @@ export default function JoinTables() {
       setSchemas([]);
       setSelectedSchema("");
       setTables([]);
+      setMessages([]);
     }
   }, [selectedEnv]);
 
@@ -74,21 +72,9 @@ export default function JoinTables() {
       fetchTables(selectedEnv, selectedSchema);
     } else {
       setTables([]);
-      setTablesWithColumns([]);
+      setMessages([]);
     }
   }, [selectedSchema, selectedEnv]);
-
-  useEffect(() => {
-    if (tables.length > 0 && selectedSchema && selectedEnv) {
-      fetchAllColumns(selectedEnv, selectedSchema, tables);
-    }
-  }, [tables, selectedSchema, selectedEnv]);
-
-  useEffect(() => {
-    if (tablesWithColumns.length > 0 && selectedSchema && selectedEnv) {
-      fetchForeignKeys(selectedEnv, selectedSchema);
-    }
-  }, [tablesWithColumns, selectedSchema, selectedEnv]);
 
   const fetchSchemas = async (env: string) => {
     setLoading(true);
@@ -121,7 +107,6 @@ export default function JoinTables() {
   const fetchTables = async (env: string, schema: string) => {
     setLoadingTables(true);
     setTablesError("");
-    setTablesWithColumns([]);
     
     try {
       const response = await fetch("/api/tables", {
@@ -146,89 +131,271 @@ export default function JoinTables() {
     }
   };
 
-  const fetchAllColumns = async (env: string, schema: string, tables: Table[]) => {
-    setLoadingColumns(true);
+  const sendMessage = async () => {
+    if (!currentInput.trim()) {
+      return;
+    }
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: currentInput,
+      timestamp: new Date(),
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setCurrentInput("");
+
+    // Create assistant message placeholder
+    const assistantMessageId = (Date.now() + 1).toString();
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, assistantMessage]);
+
+    // Build conversation context for the API
+    const conversationContext = messages.map(msg => ({
+      role: msg.role,
+      content: msg.content,
+      relevantTables: msg.relevantTables,
+      sql: msg.sql,
+      result: msg.result ? {
+        rowCount: msg.result.rowCount,
+        preview: JSON.stringify(msg.result.rows.slice(0, 3))
+      } : undefined
+    }));
+
+    // Step 1: Identify relevant tables
+    setIdentifyingTables(true);
+    let relevantTables: string[] = [];
     
     try {
-      // Fetch columns for all tables in parallel
-      const columnPromises = tables.map(async (table) => {
-        const response = await fetch("/api/columns", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ env, schema, table: table.name }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch columns for ${table.name}`);
-        }
-
-        const data = await response.json();
-        return {
-          table: table.name,
-          type: table.type,
-          columns: data.columns || [],
-        };
-      });
-
-      const results = await Promise.all(columnPromises);
-      setTablesWithColumns(results);
-    } catch (err) {
-      console.error("Error fetching all columns:", err);
-      setTablesError("Failed to load columns for all tables");
-    } finally {
-      setLoadingColumns(false);
-    }
-  };
-
-  const fetchForeignKeys = async (env: string, schema: string) => {
-    try {
-      const response = await fetch("/api/foreign-keys", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ env, schema }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch foreign keys");
-      }
-
-      const data = await response.json();
-      setForeignKeys(data.foreignKeys || []);
-    } catch (err) {
-      console.error("Error fetching foreign keys:", err);
-    }
-  };
-
-  const optimizeLayout = async () => {
-    if (!tablesWithColumns.length || !selectedEnv || !selectedSchema) return;
-    
-    setOptimizingLayout(true);
-    try {
-      const response = await fetch("/api/optimize-erd-layout", {
+      const response = await fetch("/api/identify-relevant-tables", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          tablesWithColumns,
-          foreignKeys,
+          query: currentInput,
+          tables: tables.map(t => t.name),
+          conversationContext,
         }),
       });
 
       if (!response.ok) {
-        throw new Error("Failed to optimize layout");
+        throw new Error("Failed to identify relevant tables");
       }
 
       const data = await response.json();
-      setOptimizedLayout(data.layout);
+      relevantTables = data.relevantTables || [];
+      
+      // Update assistant message with relevant tables
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, relevantTables } 
+          : msg
+      ));
     } catch (err) {
-      console.error("Error optimizing layout:", err);
-    } finally {
-      setOptimizingLayout(false);
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, error: "Failed to identify relevant tables" } 
+          : msg
+      ));
+      console.error(err);
+      setIdentifyingTables(false);
+      return;
+    }
+    
+    setIdentifyingTables(false);
+
+    if (relevantTables.length === 0) {
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, error: "No relevant tables identified for your query" } 
+          : msg
+      ));
+      return;
+    }
+
+    // Step 2: Fetch columns for relevant tables
+    setFetchingColumns(true);
+    let tablesWithColumns: TableWithColumns[] = [];
+    
+    try {
+      const columnPromises = relevantTables.map(async (tableName) => {
+        const response = await fetch("/api/columns", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ 
+            env: selectedEnv, 
+            schema: selectedSchema, 
+            table: tableName 
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch columns for ${tableName}`);
+        }
+
+        const data = await response.json();
+        return {
+          table: tableName,
+          columns: data.columns || [],
+        };
+      });
+
+      tablesWithColumns = await Promise.all(columnPromises);
+    } catch (err) {
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, error: "Failed to fetch columns for relevant tables" } 
+          : msg
+      ));
+      console.error(err);
+      setFetchingColumns(false);
+      return;
+    }
+    
+    setFetchingColumns(false);
+
+    // Step 3: Generate joined SQL query
+    setGeneratingSQL(true);
+    let sql = "";
+    
+    try {
+      const response = await fetch("/api/generate-joined-sql", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          env: selectedEnv,
+          schema: selectedSchema,
+          query: currentInput,
+          tablesWithColumns,
+          conversationContext,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to generate SQL");
+      }
+
+      const data = await response.json();
+      sql = data.sql || "";
+      
+      // Update assistant message with SQL
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, sql } 
+          : msg
+      ));
+    } catch (err) {
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, error: "Failed to generate SQL" } 
+          : msg
+      ));
+      console.error(err);
+      setGeneratingSQL(false);
+      return;
+    }
+    
+    setGeneratingSQL(false);
+
+    // Step 4: Execute SQL
+    setExecutingSQL(true);
+    let result: QueryResult | undefined = undefined;
+    
+    try {
+      const response = await fetch("/api/execute-sql", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          env: selectedEnv,
+          sql,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to execute SQL");
+      }
+
+      const data = await response.json();
+      
+      if (data.error) {
+        setMessages(prev => prev.map(msg => 
+          msg.id === assistantMessageId 
+            ? { ...msg, error: data.error } 
+            : msg
+        ));
+        setExecutingSQL(false);
+        return;
+      }
+      
+      result = data.result;
+      
+      // Update assistant message with result
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, result: result } 
+          : msg
+      ));
+    } catch (err) {
+      setMessages(prev => prev.map(msg => 
+        msg.id === assistantMessageId 
+          ? { ...msg, error: "Failed to execute SQL" } 
+          : msg
+      ));
+      console.error(err);
+      setExecutingSQL(false);
+      return;
+    }
+    
+    setExecutingSQL(false);
+
+    // Step 5: Generate interpretation
+    if (result) {
+      setGeneratingInterpretation(true);
+      
+      try {
+        const response = await fetch("/api/interpret-results", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            naturalLanguageQuery: currentInput,
+            sql,
+            result,
+            conversationContext,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to generate interpretation");
+        }
+
+        const data = await response.json();
+        
+        // Update assistant message with interpretation
+        setMessages(prev => prev.map(msg => 
+          msg.id === assistantMessageId 
+            ? { ...msg, interpretation: data.interpretation || "", content: data.interpretation || "" } 
+            : msg
+        ));
+      } catch (err) {
+        console.error("Failed to generate interpretation:", err);
+      } finally {
+        setGeneratingInterpretation(false);
+      }
     }
   };
 
@@ -236,8 +403,8 @@ export default function JoinTables() {
     <div className="min-h-screen">
       <div className="p-6">
         <div className="max-w-7xl mx-auto">
-          <h1 className="text-4xl mb-8">ERD generator</h1>
-        
+          <h1 className="text-4xl mb-8">join tables</h1>
+          
           <div className="mb-6">
             <label htmlFor="env-selector" className="block text-sm mb-2">
               Select Demo Environment
@@ -291,59 +458,36 @@ export default function JoinTables() {
 
           {selectedSchema && (
             <div className="mt-8">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-2xl">Entity Relationship Diagram - {selectedSchema}</h2>
-                {!loadingTables && !loadingColumns && tablesWithColumns.length > 0 && (
-                  <button
-                    onClick={optimizeLayout}
-                    disabled={optimizingLayout}
-                    className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
-                  >
-                    {optimizingLayout && (
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    )}
-                    {optimizingLayout ? 'Optimizing...' : 'Optimize Layout'}
-                  </button>
-                )}
-              </div>
+              <h2 className="text-2xl mb-4">Tables in {selectedSchema}</h2>
               
-              {(loadingTables || loadingColumns) && (
-                <p className="text-gray-600 dark:text-gray-400">
-                  {loadingTables ? "Loading tables..." : "Loading columns..."}
-                </p>
+              {loadingTables && (
+                <p className="text-gray-600 dark:text-gray-400">Loading tables...</p>
               )}
               
               {tablesError && (
                 <p className="text-red-600 dark:text-red-400">{tablesError}</p>
               )}
               
-              {!loadingTables && !loadingColumns && !tablesError && tablesWithColumns.length > 0 && (
-                <>
-                  {optimizedLayout && (
-                    <div className="mb-4 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
-                      <div className="flex items-center gap-6">
-                        <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">Legend:</span>
-                        <div className="flex items-center gap-2">
-                          <div className="w-4 h-4 bg-orange-600 rounded"></div>
-                          <span className="text-xs text-gray-600 dark:text-gray-400">Fact Tables</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="w-4 h-4 bg-blue-600 rounded"></div>
-                          <span className="text-xs text-gray-600 dark:text-gray-400">Dimension Tables</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="w-4 h-4 bg-purple-600 rounded"></div>
-                          <span className="text-xs text-gray-600 dark:text-gray-400">Bridge Tables</span>
-                        </div>
-                      </div>
+              {!loadingTables && !tablesError && tables.length > 0 && (
+                <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden mb-8">
+                  <div className="bg-gray-50 dark:bg-gray-800 px-4 py-3">
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {tables.length} tables available in this schema
+                    </p>
+                  </div>
+                  <div className="max-h-40 overflow-y-auto">
+                    <div className="px-4 py-2 flex flex-wrap gap-2">
+                      {tables.map((table) => (
+                        <span 
+                          key={table.name}
+                          className="inline-block px-3 py-1 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded text-xs font-mono"
+                        >
+                          {table.name}
+                        </span>
+                      ))}
                     </div>
-                  )}
-                  <ERDVisualization 
-                    tablesWithColumns={tablesWithColumns} 
-                    foreignKeys={foreignKeys}
-                    optimizedLayout={optimizedLayout}
-                  />
-                </>
+                  </div>
+                </div>
               )}
               
               {!loadingTables && !tablesError && tables.length === 0 && (
@@ -351,241 +495,227 @@ export default function JoinTables() {
               )}
             </div>
           )}
+
+          {selectedSchema && tables.length > 0 && (
+            <div className="mt-8">
+              <h2 className="text-2xl mb-4">Ask a Question</h2>
+              
+              {/* Messages Display */}
+              <div className="mb-6 space-y-4 max-h-[600px] overflow-y-auto border border-gray-300 dark:border-gray-700 rounded-lg p-4">
+                {messages.length === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-gray-500 dark:text-gray-400 mb-2">
+                      Ask a question that requires joining multiple tables...
+                    </p>
+                    <p className="text-sm text-gray-400 dark:text-gray-500">
+                      Example: "Show me all customers and their orders" or "What products have been ordered the most?"
+                    </p>
+                  </div>
+                ) : (
+                  messages.map((message) => (
+                    <div key={message.id} className={`${message.role === 'user' ? 'text-right' : 'text-left'}`}>
+                      {message.role === 'user' ? (
+                        <div className="inline-block bg-blue-600 text-white px-4 py-2 rounded-lg max-w-[80%]">
+                          <p className="text-sm">{message.content}</p>
+                        </div>
+                      ) : (
+                        <div className="inline-block bg-gray-100 dark:bg-gray-800 px-4 py-3 rounded-lg max-w-[90%] text-left">
+                          {message.error ? (
+                            <div className="text-red-600 dark:text-red-400">
+                              <p className="text-sm font-semibold mb-1">Error</p>
+                              <p className="text-sm">{message.error}</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                              {message.relevantTables && message.relevantTables.length > 0 && (
+                                <div>
+                                  <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">
+                                    Relevant Tables Identified:
+                                  </p>
+                                  <div className="flex flex-wrap gap-1">
+                                    {message.relevantTables.map((table) => (
+                                      <span 
+                                        key={table}
+                                        className="inline-block px-2 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-xs font-mono"
+                                      >
+                                        {table}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              
+                              {message.sql && (
+                                <div>
+                                  <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">SQL Query:</p>
+                                  <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto">
+                                    {message.sql}
+                                  </pre>
+                                </div>
+                              )}
+                              
+                              {message.result && (
+                                <div>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <p className="text-xs font-semibold text-gray-600 dark:text-gray-400">
+                                      Results ({message.result.rowCount} rows)
+                                    </p>
+                                    {message.result.rowCount > 5 && (
+                                      <button
+                                        onClick={() => {
+                                          const newExpanded = new Set(expandedResults);
+                                          if (expandedResults.has(message.id)) {
+                                            newExpanded.delete(message.id);
+                                          } else {
+                                            newExpanded.add(message.id);
+                                          }
+                                          setExpandedResults(newExpanded);
+                                        }}
+                                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                                      >
+                                        {expandedResults.has(message.id) ? 'Show less' : `Show all ${message.result.rowCount} rows`}
+                                      </button>
+                                    )}
+                                  </div>
+                                  <div className={`border border-gray-300 dark:border-gray-700 rounded overflow-x-auto ${
+                                    expandedResults.has(message.id) ? 'max-h-96' : 'max-h-64'
+                                  }`}>
+                                    <table className="w-full text-xs">
+                                      <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
+                                        <tr>
+                                          {message.result.columns.map((col) => (
+                                            <th key={col} className="px-2 py-1 text-left font-medium whitespace-nowrap">
+                                              {col}
+                                            </th>
+                                          ))}
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                                        {(expandedResults.has(message.id) 
+                                          ? message.result.rows 
+                                          : message.result.rows.slice(0, 5)
+                                        ).map((row, idx) => (
+                                          <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                                            {message.result!.columns.map((col) => (
+                                              <td key={col} className="px-2 py-1 font-mono whitespace-nowrap">
+                                                {row[col] === null ? (
+                                                  <span className="text-gray-400 italic">null</span>
+                                                ) : typeof row[col] === 'object' ? (
+                                                  JSON.stringify(row[col])
+                                                ) : (
+                                                  String(row[col])
+                                                )}
+                                              </td>
+                                            ))}
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                  {!expandedResults.has(message.id) && message.result.rowCount > 5 && (
+                                    <p className="text-xs text-gray-500 mt-1">Showing first 5 of {message.result.rowCount} rows</p>
+                                  )}
+                                </div>
+                              )}
+                              
+                              {message.interpretation && (
+                                <div className="border-t border-gray-300 dark:border-gray-700 pt-2">
+                                  <p className="text-sm leading-relaxed">{message.interpretation}</p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+                
+                {/* Loading indicators */}
+                {identifyingTables && (
+                  <div className="text-left">
+                    <div className="inline-block bg-gray-100 dark:bg-gray-800 px-4 py-3 rounded-lg">
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm">Identifying relevant tables...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {fetchingColumns && !identifyingTables && (
+                  <div className="text-left">
+                    <div className="inline-block bg-gray-100 dark:bg-gray-800 px-4 py-3 rounded-lg">
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm">Fetching column information...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {generatingSQL && !fetchingColumns && !identifyingTables && (
+                  <div className="text-left">
+                    <div className="inline-block bg-gray-100 dark:bg-gray-800 px-4 py-3 rounded-lg">
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm">Generating SQL...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {executingSQL && !generatingSQL && !fetchingColumns && !identifyingTables && (
+                  <div className="text-left">
+                    <div className="inline-block bg-gray-100 dark:bg-gray-800 px-4 py-3 rounded-lg">
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm">Executing query...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {generatingInterpretation && !executingSQL && !generatingSQL && !fetchingColumns && !identifyingTables && (
+                  <div className="text-left">
+                    <div className="inline-block bg-gray-100 dark:bg-gray-800 px-4 py-3 rounded-lg">
+                      <div className="flex items-center gap-2">
+                        <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-sm">Generating interpretation...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              {/* Input Area */}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={currentInput}
+                  onChange={(e) => setCurrentInput(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendMessage();
+                    }
+                  }}
+                  placeholder="Ask a question that requires joining tables..."
+                  className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  disabled={identifyingTables || fetchingColumns || generatingSQL || executingSQL || generatingInterpretation}
+                />
+                <button
+                  onClick={sendMessage}
+                  disabled={!currentInput.trim() || identifyingTables || fetchingColumns || generatingSQL || executingSQL || generatingInterpretation}
+                  className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                >
+                  Send
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
-
-// Custom node component with column-level handles
-function TableNode({ data }: NodeProps) {
-  const tableWithCols = data.tableWithCols as TableWithColumns;
-  const tableType = data.tableType as 'fact' | 'dimension' | 'bridge' | undefined;
-  
-  // Determine header color based on table type
-  const headerColors = {
-    fact: 'bg-orange-600',
-    dimension: 'bg-blue-600',
-    bridge: 'bg-purple-600',
-  };
-  
-  const headerColor = tableType ? headerColors[tableType] : 'bg-blue-600';
-  
-  return (
-    <div className="w-full">
-      {/* Table Header */}
-      <div className={`${headerColor} text-white px-3 py-2 font-mono font-semibold text-sm flex items-center justify-between`}>
-        <span>{tableWithCols.table}</span>
-        {tableType && (
-          <span className="text-[10px] opacity-75 uppercase">{tableType}</span>
-        )}
-      </div>
-      
-      {/* Columns List */}
-      <div className="bg-white">
-        {tableWithCols.columns.map((column, idx) => {
-          return (
-            <div 
-              key={column.name}
-              className={`px-3 py-1.5 text-xs border-b border-gray-200 relative ${
-                idx === tableWithCols.columns.length - 1 ? 'border-b-0' : ''
-              }`}
-            >
-              {/* Left handle for incoming connections */}
-              <Handle
-                type="target"
-                position={Position.Left}
-                id={`${tableWithCols.table}-${column.name}-target`}
-                style={{ 
-                  top: '50%',
-                  left: -6,
-                  width: 8,
-                  height: 8,
-                  background: '#2563eb',
-                  border: '2px solid white',
-                }}
-              />
-              
-              {/* Right handle for outgoing connections */}
-              <Handle
-                type="source"
-                position={Position.Right}
-                id={`${tableWithCols.table}-${column.name}-source`}
-                style={{ 
-                  top: '50%',
-                  right: -6,
-                  width: 8,
-                  height: 8,
-                  background: '#2563eb',
-                  border: '2px solid white',
-                }}
-              />
-              
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-mono font-medium text-gray-900 truncate">
-                  {column.name}
-                </span>
-                <span className="text-gray-500 text-[10px] shrink-0">
-                  {column.type}
-                </span>
-              </div>
-            </div>
-          );
-        })}
-        {tableWithCols.columns.length === 0 && (
-          <div className="px-3 py-2 text-xs text-gray-400 italic">
-            No columns
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-const nodeTypes = {
-  tableNode: TableNode,
-};
-
-interface ERDVisualizationProps {
-  tablesWithColumns: TableWithColumns[];
-  foreignKeys: ForeignKey[];
-  optimizedLayout: OptimizedLayout | null;
-}
-
-function ERDVisualization({ tablesWithColumns, foreignKeys, optimizedLayout }: ERDVisualizationProps) {
-  const nodes: Node[] = useMemo(() => {
-    // If we have optimized layout, use it; otherwise use grid layout
-    if (optimizedLayout) {
-      return tablesWithColumns.map((tableWithCols) => {
-        const classification = optimizedLayout.classifications.find(
-          c => c.tableName === tableWithCols.table
-        );
-        const position = optimizedLayout.positions[tableWithCols.table] || { x: 0, y: 0 };
-        
-        return {
-          id: tableWithCols.table,
-          type: 'tableNode',
-          position,
-          data: { 
-            tableWithCols,
-            tableType: classification?.type,
-          },
-          style: {
-            background: 'white',
-            border: `2px solid ${
-              classification?.type === 'fact' ? '#ea580c' :
-              classification?.type === 'bridge' ? '#9333ea' :
-              '#2563eb'
-            }`,
-            borderRadius: '8px',
-            fontSize: '12px',
-            width: 280,
-            padding: 0,
-            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-          },
-        };
-      });
-    }
-    
-    // Default grid layout - more spread out
-    const columns = Math.ceil(Math.sqrt(tablesWithColumns.length));
-    const horizontalSpacing = 500;
-    const verticalSpacing = 400;
-    
-    return tablesWithColumns.map((tableWithCols, index) => {
-      const row = Math.floor(index / columns);
-      const col = index % columns;
-      
-      return {
-        id: tableWithCols.table,
-        type: 'tableNode',
-        position: { 
-          x: col * horizontalSpacing + 50, 
-          y: row * verticalSpacing + 50 
-        },
-        data: { 
-          tableWithCols,
-          tableType: undefined,
-        },
-        style: {
-          background: 'white',
-          border: '2px solid #2563eb',
-          borderRadius: '8px',
-          fontSize: '12px',
-          width: 280,
-          padding: 0,
-          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-        },
-      };
-    });
-  }, [tablesWithColumns, optimizedLayout]);
-
-  const edges: Edge[] = useMemo(() => {
-    return foreignKeys.map((fk, index) => ({
-      id: fk.constraintName || `fk-${index}`,
-      source: fk.fromTable,
-      sourceHandle: `${fk.fromTable}-${fk.fromColumn}-source`,
-      target: fk.toTable,
-      targetHandle: `${fk.toTable}-${fk.toColumn}-target`,
-      type: 'smoothstep',
-      animated: false,
-      label: `${fk.fromColumn} → ${fk.toColumn}`,
-      style: { 
-        stroke: '#2563eb', 
-        strokeWidth: 2,
-        strokeOpacity: 0.6,
-      },
-      labelStyle: { 
-        fontSize: 9, 
-        fill: '#6b7280',
-        fontWeight: 500,
-      },
-      labelBgStyle: { 
-        fill: 'white', 
-        fillOpacity: 0.9,
-        rx: 4,
-        ry: 4,
-      },
-      labelBgPadding: [4, 8] as [number, number],
-      labelBgBorderRadius: 4,
-    }));
-  }, [foreignKeys]);
-
-  return (
-    <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden" style={{ height: '800px' }}>
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        fitView
-        fitViewOptions={{
-          padding: 0.2,
-          minZoom: 0.1,
-          maxZoom: 1,
-        }}
-        minZoom={0.05}
-        maxZoom={1.5}
-        defaultEdgeOptions={{
-          type: 'smoothstep',
-          style: { strokeWidth: 2 },
-        }}
-      >
-        <Background gap={16} size={1} />
-        <Controls />
-        <MiniMap 
-          nodeColor={(node) => {
-            const type = node.data?.tableType;
-            if (type === 'fact') return '#ea580c';
-            if (type === 'bridge') return '#9333ea';
-            return '#2563eb';
-          }}
-          style={{
-            height: 120,
-            width: 160,
-          }}
-        />
-      </ReactFlow>
-    </div>
-  );
-}
-
