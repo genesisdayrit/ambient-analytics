@@ -1,6 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { Chart, ChartConfiguration, registerables } from 'chart.js';
+
+// Register Chart.js components
+if (typeof window !== 'undefined') {
+  Chart.register(...registerables);
+}
 
 interface Table {
   name: string;
@@ -46,6 +52,8 @@ interface Message {
   evaluation?: SQLEvaluation;
   result?: QueryResult;
   interpretation?: string;
+  chartConfig?: any; // Chart.js configuration
+  refinedChartConfig?: any; // Chart for refined results
   error?: string;
   timestamp: Date;
   userQuestion?: string; // Store the original question for refinement
@@ -71,6 +79,7 @@ export default function JoinTables() {
   const [evaluating, setEvaluating] = useState(false);
   const [generatingInterpretation, setGeneratingInterpretation] = useState(false);
   const [refiningSQL, setRefiningSQL] = useState<string | null>(null); // messageId being refined
+  const [generatingChart, setGeneratingChart] = useState<string | null>(null); // messageId generating chart for
 
   useEffect(() => {
     if (selectedEnv) {
@@ -554,6 +563,52 @@ export default function JoinTables() {
     return "text-red-600 dark:text-red-400";
   };
 
+  const generateChart = async (messageId: string, useRefined: boolean = false) => {
+    const message = messages.find(m => m.id === messageId);
+    if (!message) return;
+
+    const resultToUse = useRefined ? message.refinedResult : message.result;
+    const sqlToUse = useRefined ? message.refinedSQL : message.sql;
+
+    if (!resultToUse || !message.userQuestion) {
+      console.error("Cannot generate chart: missing required data");
+      return;
+    }
+
+    setGeneratingChart(messageId);
+
+    try {
+      const response = await fetch("/api/generate-chart-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          naturalLanguageQuery: message.userQuestion,
+          sql: sqlToUse,
+          result: resultToUse,
+          interpretation: message.interpretation,
+        }),
+      });
+
+      if (!response.ok) throw new Error("Failed to generate chart config");
+
+      const data = await response.json();
+      
+      // Update message with chart config
+      setMessages(prev => prev.map(msg => 
+        msg.id === messageId 
+          ? { 
+              ...msg, 
+              [useRefined ? 'refinedChartConfig' : 'chartConfig']: data.chartConfig 
+            } 
+          : msg
+      ));
+    } catch (err) {
+      console.error("Error generating chart:", err);
+    } finally {
+      setGeneratingChart(null);
+    }
+  };
+
   return (
     <div className="min-h-screen">
       <div className="p-6">
@@ -732,9 +787,10 @@ export default function JoinTables() {
                                       </button>
                                     )}
                                   </div>
-                                  <div className={`border border-gray-300 dark:border-gray-700 rounded overflow-x-auto ${
-                                    expandedResults.has(message.id) ? 'max-h-96' : 'max-h-64'
-                                  }`}>
+                                  <div className="relative">
+                                    <div className={`border border-gray-300 dark:border-gray-700 rounded overflow-x-auto ${
+                                      expandedResults.has(message.id) ? 'max-h-96' : 'max-h-64'
+                                    }`}>
                                     <table className="w-full text-xs">
                                       <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
                                         <tr>
@@ -767,8 +823,29 @@ export default function JoinTables() {
                                       </tbody>
                                     </table>
                                   </div>
-                                  {!expandedResults.has(message.id) && message.result.rowCount > 5 && (
-                                    <p className="text-xs text-gray-500 mt-1">Showing first 5 of {message.result.rowCount} rows</p>
+                                  <div className="flex items-center justify-between mt-1">
+                                    <div>
+                                      {!expandedResults.has(message.id) && message.result.rowCount > 5 && (
+                                        <p className="text-xs text-gray-500">Showing first 5 of {message.result.rowCount} rows</p>
+                                      )}
+                                    </div>
+                                    {!message.chartConfig && (
+                                      <button
+                                        onClick={() => generateChart(message.id, false)}
+                                        disabled={generatingChart === message.id}
+                                        className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+                                      >
+                                        {generatingChart === message.id ? '⏳ Generating...' : '📊 Generate Chart'}
+                                      </button>
+                                    )}
+                                  </div>
+                                  </div>
+                                  
+                                  {message.chartConfig && (
+                                    <div className="mt-3 pt-3 border-t border-gray-300 dark:border-gray-700">
+                                      <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-2">Visualization</p>
+                                      <ChartDisplay config={message.chartConfig} />
+                                    </div>
                                   )}
                                 </div>
                               )}
@@ -854,7 +931,8 @@ export default function JoinTables() {
                                         <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">
                                           Refined Results ({message.refinedResult.rowCount} rows)
                                         </p>
-                                        <div className="border border-gray-300 dark:border-gray-700 rounded overflow-x-auto max-h-48">
+                                        <div className="relative">
+                                          <div className="border border-gray-300 dark:border-gray-700 rounded overflow-x-auto max-h-48">
                                           <table className="w-full text-xs">
                                             <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
                                               <tr>
@@ -884,6 +962,25 @@ export default function JoinTables() {
                                             </tbody>
                                           </table>
                                         </div>
+                                        {!message.refinedChartConfig && (
+                                          <div className="flex justify-end mt-1">
+                                            <button
+                                              onClick={() => generateChart(message.id, true)}
+                                              disabled={generatingChart === message.id}
+                                              className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+                                            >
+                                              {generatingChart === message.id ? '⏳ Generating...' : '📊 Generate Chart'}
+                                            </button>
+                                          </div>
+                                        )}
+                                        </div>
+                                        
+                                        {message.refinedChartConfig && (
+                                          <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                                            <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-2">Refined Visualization</p>
+                                            <ChartDisplay config={message.refinedChartConfig} />
+                                          </div>
+                                        )}
                                       </div>
                                     )}
                                   </div>
@@ -999,6 +1096,41 @@ export default function JoinTables() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Chart Display Component
+function ChartDisplay({ config }: { config: ChartConfiguration }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const chartRef = useRef<Chart | null>(null);
+
+  useEffect(() => {
+    if (!canvasRef.current || !config) return;
+
+    // Destroy existing chart if it exists
+    if (chartRef.current) {
+      chartRef.current.destroy();
+    }
+
+    // Create new chart
+    try {
+      chartRef.current = new Chart(canvasRef.current, config);
+    } catch (error) {
+      console.error("Failed to create chart:", error);
+    }
+
+    // Cleanup on unmount
+    return () => {
+      if (chartRef.current) {
+        chartRef.current.destroy();
+      }
+    };
+  }, [config]);
+
+  return (
+    <div className="bg-white dark:bg-gray-900 p-4 rounded-lg border border-gray-300 dark:border-gray-700">
+      <canvas ref={canvasRef}></canvas>
     </div>
   );
 }
