@@ -171,14 +171,14 @@ function QueryNode({ data, selected }: { data: SavedQuery & { onRemove: () => vo
 
 function ChartNode({ data, selected }: { data: SavedChart & { onRemove: () => void; onReExecute: () => void }; selected?: boolean }) {
   return (
-    <div className="bg-white dark:bg-gray-800 border-2 border-purple-400 dark:border-purple-600 rounded-lg p-4 shadow-lg w-full h-full overflow-auto" style={{ minWidth: '400px', minHeight: '300px' }}>
+    <div className="bg-white dark:bg-gray-800 border-2 border-purple-400 dark:border-purple-600 rounded-lg p-4 shadow-lg w-full h-full flex flex-col" style={{ minWidth: '400px', minHeight: '300px' }}>
       <NodeResizer 
         color="#a855f7" 
         isVisible={selected}
         minWidth={400}
         minHeight={300}
       />
-      <div className="flex items-start justify-between mb-2">
+      <div className="flex items-start justify-between mb-2 flex-shrink-0">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-lg">📈</span>
@@ -194,25 +194,27 @@ function ChartNode({ data, selected }: { data: SavedChart & { onRemove: () => vo
         </button>
       </div>
       {data.chartConfig && (
-        <div className="mb-2">
+        <div className="mb-2 flex-1 min-h-0">
           <ChartDisplay config={data.chartConfig} />
         </div>
       )}
-      <details className="mb-2">
-        <summary className="text-xs text-gray-600 dark:text-gray-400 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
-          View SQL
-        </summary>
-        <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto mt-1">
-          {data.sql}
-        </pre>
-      </details>
-      <button
-        onClick={data.onReExecute}
-        disabled={data.isExecuting}
-        className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors w-full"
-      >
-        {data.isExecuting ? '⏳ Refreshing...' : '🔄 Refresh Data'}
-      </button>
+      <div className="flex-shrink-0">
+        <details className="mb-2">
+          <summary className="text-xs text-gray-600 dark:text-gray-400 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
+            View SQL
+          </summary>
+          <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto mt-1 max-h-20 overflow-y-auto">
+            {data.sql}
+          </pre>
+        </details>
+        <button
+          onClick={data.onReExecute}
+          disabled={data.isExecuting}
+          className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors w-full"
+        >
+          {data.isExecuting ? '⏳ Refreshing...' : '🔄 Refresh Data'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1621,6 +1623,7 @@ export default function DashboardCreator() {
 function ChartDisplay({ config }: { config: ChartConfiguration }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!canvasRef.current || !config) return;
@@ -1630,9 +1633,19 @@ function ChartDisplay({ config }: { config: ChartConfiguration }) {
       chartRef.current.destroy();
     }
 
+    // Make chart responsive by ensuring config has responsive options
+    const responsiveConfig = {
+      ...config,
+      options: {
+        ...config.options,
+        responsive: true,
+        maintainAspectRatio: false,
+      }
+    };
+
     // Create new chart
     try {
-      chartRef.current = new Chart(canvasRef.current, config);
+      chartRef.current = new Chart(canvasRef.current, responsiveConfig);
     } catch (error) {
       console.error("Failed to create chart:", error);
     }
@@ -1645,9 +1658,32 @@ function ChartDisplay({ config }: { config: ChartConfiguration }) {
     };
   }, [config]);
 
+  // Handle resize events to update chart
+  useEffect(() => {
+    const handleResize = () => {
+      if (chartRef.current) {
+        chartRef.current.resize();
+      }
+    };
+
+    const resizeObserver = new ResizeObserver(() => {
+      handleResize();
+    });
+
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, []);
+
   return (
-    <div className="bg-white dark:bg-gray-900 p-4 rounded-lg border border-gray-300 dark:border-gray-700">
-      <canvas ref={canvasRef}></canvas>
+    <div ref={containerRef} className="bg-white dark:bg-gray-900 p-4 rounded-lg border border-gray-300 dark:border-gray-700" style={{ height: '100%', minHeight: '200px' }}>
+      <div style={{ position: 'relative', height: '100%', width: '100%' }}>
+        <canvas ref={canvasRef}></canvas>
+      </div>
     </div>
   );
 }
