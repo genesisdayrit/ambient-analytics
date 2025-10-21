@@ -1,7 +1,19 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Chart, ChartConfiguration, registerables } from 'chart.js';
+import ReactFlow, {
+  Node,
+  Edge,
+  Controls,
+  Background,
+  useNodesState,
+  useEdgesState,
+  NodeTypes,
+  BackgroundVariant,
+  NodeResizer,
+} from 'reactflow';
+import 'reactflow/dist/style.css';
 
 // Register Chart.js components
 if (typeof window !== 'undefined') {
@@ -81,6 +93,136 @@ interface SavedChart {
   isExecuting?: boolean;
 }
 
+// Custom Node Components for React Flow
+function QueryNode({ data, selected }: { data: SavedQuery & { onRemove: () => void; onReExecute: () => void }; selected?: boolean }) {
+  return (
+    <div className="bg-white dark:bg-gray-800 border-2 border-blue-400 dark:border-blue-600 rounded-lg p-4 shadow-lg w-full h-full overflow-auto" style={{ minWidth: '350px', minHeight: '200px' }}>
+      <NodeResizer 
+        color="#3b82f6" 
+        isVisible={selected}
+        minWidth={350}
+        minHeight={200}
+      />
+      <div className="flex items-start justify-between mb-2">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-lg">📊</span>
+            <h4 className="font-semibold text-sm">{data.name}</h4>
+          </div>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">{data.userQuestion}</p>
+        </div>
+        <button
+          onClick={data.onRemove}
+          className="text-red-600 hover:text-red-700 text-xs ml-2 p-1"
+        >
+          ✕
+        </button>
+      </div>
+      <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto mb-2 max-h-24">
+        {data.sql}
+      </pre>
+      {data.result && (
+        <div className="mb-2">
+          <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">
+            Results: {data.result.rowCount} rows
+          </p>
+          <div className="border border-gray-200 dark:border-gray-700 rounded overflow-x-auto max-h-32">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
+                <tr>
+                  {data.result.columns.map((col) => (
+                    <th key={col} className="px-2 py-1 text-left font-medium whitespace-nowrap">
+                      {col}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {data.result.rows.slice(0, 3).map((row, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                    {data.result!.columns.map((col) => (
+                      <td key={col} className="px-2 py-1 font-mono whitespace-nowrap">
+                        {row[col] === null ? (
+                          <span className="text-gray-400 italic">null</span>
+                        ) : typeof row[col] === 'object' ? (
+                          JSON.stringify(row[col])
+                        ) : (
+                          String(row[col])
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      <button
+        onClick={data.onReExecute}
+        disabled={data.isExecuting}
+        className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors w-full"
+      >
+        {data.isExecuting ? '⏳ Executing...' : '🔄 Re-execute'}
+      </button>
+    </div>
+  );
+}
+
+function ChartNode({ data, selected }: { data: SavedChart & { onRemove: () => void; onReExecute: () => void }; selected?: boolean }) {
+  return (
+    <div className="bg-white dark:bg-gray-800 border-2 border-purple-400 dark:border-purple-600 rounded-lg p-4 shadow-lg w-full h-full overflow-auto" style={{ minWidth: '400px', minHeight: '300px' }}>
+      <NodeResizer 
+        color="#a855f7" 
+        isVisible={selected}
+        minWidth={400}
+        minHeight={300}
+      />
+      <div className="flex items-start justify-between mb-2">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-lg">📈</span>
+            <h4 className="font-semibold text-sm">{data.name}</h4>
+          </div>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">{data.userQuestion}</p>
+        </div>
+        <button
+          onClick={data.onRemove}
+          className="text-red-600 hover:text-red-700 text-xs ml-2 p-1"
+        >
+          ✕
+        </button>
+      </div>
+      {data.chartConfig && (
+        <div className="mb-2">
+          <ChartDisplay config={data.chartConfig} />
+        </div>
+      )}
+      <details className="mb-2">
+        <summary className="text-xs text-gray-600 dark:text-gray-400 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
+          View SQL
+        </summary>
+        <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto mt-1">
+          {data.sql}
+        </pre>
+      </details>
+      <button
+        onClick={data.onReExecute}
+        disabled={data.isExecuting}
+        className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors w-full"
+      >
+        {data.isExecuting ? '⏳ Refreshing...' : '🔄 Refresh Data'}
+      </button>
+    </div>
+  );
+}
+
+// Define custom node types
+const nodeTypes: NodeTypes = {
+  queryNode: QueryNode,
+  chartNode: ChartNode,
+};
+
 export default function DashboardCreator() {
   const [selectedEnv, setSelectedEnv] = useState("");
   const [schemas, setSchemas] = useState<string[]>([]);
@@ -107,6 +249,150 @@ export default function DashboardCreator() {
   // Dashboard state
   const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
   const [savedCharts, setSavedCharts] = useState<SavedChart[]>([]);
+  
+  // React Flow state
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  
+  // Dashboard action callbacks
+  const removeSavedQuery = useCallback((queryId: string) => {
+    setSavedQueries(prev => prev.filter(q => q.id !== queryId));
+  }, []);
+
+  const removeSavedChart = useCallback((chartId: string) => {
+    setSavedCharts(prev => prev.filter(c => c.id !== chartId));
+  }, []);
+  
+  const reExecuteSavedQuery = useCallback(async (queryId: string) => {
+    const query = savedQueries.find(q => q.id === queryId);
+    if (!query) return;
+
+    setSavedQueries(prev => prev.map(q => 
+      q.id === queryId ? { ...q, isExecuting: true } : q
+    ));
+
+    try {
+      const response = await fetch("/api/execute-sql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ env: selectedEnv, sql: query.sql }),
+      });
+
+      if (!response.ok) throw new Error("Failed to execute query");
+      const data = await response.json();
+      
+      if (!data.error) {
+        setSavedQueries(prev => prev.map(q => 
+          q.id === queryId ? { ...q, result: data.result, isExecuting: false } : q
+        ));
+      } else {
+        setSavedQueries(prev => prev.map(q => 
+          q.id === queryId ? { ...q, isExecuting: false } : q
+        ));
+        alert("Error executing query: " + data.error);
+      }
+    } catch (err) {
+      console.error("Error re-executing query:", err);
+      setSavedQueries(prev => prev.map(q => 
+        q.id === queryId ? { ...q, isExecuting: false } : q
+      ));
+    }
+  }, [savedQueries, selectedEnv]);
+
+  const reExecuteSavedChart = useCallback(async (chartId: string) => {
+    const chart = savedCharts.find(c => c.id === chartId);
+    if (!chart) return;
+
+    setSavedCharts(prev => prev.map(c => 
+      c.id === chartId ? { ...c, isExecuting: true } : c
+    ));
+
+    try {
+      const response = await fetch("/api/execute-sql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ env: selectedEnv, sql: chart.sql }),
+      });
+
+      if (!response.ok) throw new Error("Failed to execute query");
+      const data = await response.json();
+      
+      if (!data.error) {
+        const chartResponse = await fetch("/api/generate-chart-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            naturalLanguageQuery: chart.userQuestion,
+            sql: chart.sql,
+            result: data.result,
+          }),
+        });
+
+        if (chartResponse.ok) {
+          const chartData = await chartResponse.json();
+          setSavedCharts(prev => prev.map(c => 
+            c.id === chartId ? { 
+              ...c, 
+              result: data.result, 
+              chartConfig: chartData.chartConfig,
+              isExecuting: false 
+            } : c
+          ));
+        } else {
+          setSavedCharts(prev => prev.map(c => 
+            c.id === chartId ? { ...c, result: data.result, isExecuting: false } : c
+          ));
+        }
+      } else {
+        setSavedCharts(prev => prev.map(c => 
+          c.id === chartId ? { ...c, isExecuting: false } : c
+        ));
+        alert("Error executing query: " + data.error);
+      }
+    } catch (err) {
+      console.error("Error re-executing chart:", err);
+      setSavedCharts(prev => prev.map(c => 
+        c.id === chartId ? { ...c, isExecuting: false } : c
+      ));
+    }
+  }, [savedCharts, selectedEnv]);
+
+  // Sync saved queries and charts to React Flow nodes
+  useEffect(() => {
+    const newNodes: Node[] = [];
+    
+    // Add query nodes
+    savedQueries.forEach((query, index) => {
+      newNodes.push({
+        id: `query-${query.id}`,
+        type: 'queryNode',
+        position: { x: 50 + (index % 3) * 420, y: 50 + Math.floor(index / 3) * 350 },
+        style: { width: 380, height: 280 },
+        data: {
+          ...query,
+          onRemove: () => removeSavedQuery(query.id),
+          onReExecute: () => reExecuteSavedQuery(query.id),
+        },
+      });
+    });
+    
+    // Add chart nodes
+    savedCharts.forEach((chart, index) => {
+      newNodes.push({
+        id: `chart-${chart.id}`,
+        type: 'chartNode',
+        position: { x: 50 + (index % 2) * 650, y: 50 + savedQueries.length * 350 + Math.floor(index / 2) * 450 },
+        style: { width: 500, height: 400 },
+        data: {
+          ...chart,
+          onRemove: () => removeSavedChart(chart.id),
+          onReExecute: () => reExecuteSavedChart(chart.id),
+        },
+      });
+    });
+    
+    setNodes(newNodes);
+  }, [savedQueries, savedCharts, removeSavedQuery, removeSavedChart, reExecuteSavedQuery, reExecuteSavedChart, setNodes]);
 
   useEffect(() => {
     if (selectedEnv) {
@@ -716,113 +1002,6 @@ export default function DashboardCreator() {
     setSavedCharts(prev => [...prev, savedChart]);
   };
 
-  const reExecuteSavedQuery = async (queryId: string) => {
-    const query = savedQueries.find(q => q.id === queryId);
-    if (!query) return;
-
-    // Mark as executing
-    setSavedQueries(prev => prev.map(q => 
-      q.id === queryId ? { ...q, isExecuting: true } : q
-    ));
-
-    try {
-      const response = await fetch("/api/execute-sql", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ env: selectedEnv, sql: query.sql }),
-      });
-
-      if (!response.ok) throw new Error("Failed to execute query");
-
-      const data = await response.json();
-      
-      if (!data.error) {
-        setSavedQueries(prev => prev.map(q => 
-          q.id === queryId ? { ...q, result: data.result, isExecuting: false } : q
-        ));
-      } else {
-        setSavedQueries(prev => prev.map(q => 
-          q.id === queryId ? { ...q, isExecuting: false } : q
-        ));
-        alert("Error executing query: " + data.error);
-      }
-    } catch (err) {
-      console.error("Error re-executing query:", err);
-      setSavedQueries(prev => prev.map(q => 
-        q.id === queryId ? { ...q, isExecuting: false } : q
-      ));
-    }
-  };
-
-  const reExecuteSavedChart = async (chartId: string) => {
-    const chart = savedCharts.find(c => c.id === chartId);
-    if (!chart) return;
-
-    // Mark as executing
-    setSavedCharts(prev => prev.map(c => 
-      c.id === chartId ? { ...c, isExecuting: true } : c
-    ));
-
-    try {
-      const response = await fetch("/api/execute-sql", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ env: selectedEnv, sql: chart.sql }),
-      });
-
-      if (!response.ok) throw new Error("Failed to execute query");
-
-      const data = await response.json();
-      
-      if (!data.error) {
-        // Re-generate chart config with new data
-        const chartResponse = await fetch("/api/generate-chart-config", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            naturalLanguageQuery: chart.userQuestion,
-            sql: chart.sql,
-            result: data.result,
-          }),
-        });
-
-        if (chartResponse.ok) {
-          const chartData = await chartResponse.json();
-          setSavedCharts(prev => prev.map(c => 
-            c.id === chartId ? { 
-              ...c, 
-              result: data.result, 
-              chartConfig: chartData.chartConfig,
-              isExecuting: false 
-            } : c
-          ));
-        } else {
-          setSavedCharts(prev => prev.map(c => 
-            c.id === chartId ? { ...c, result: data.result, isExecuting: false } : c
-          ));
-        }
-      } else {
-        setSavedCharts(prev => prev.map(c => 
-          c.id === chartId ? { ...c, isExecuting: false } : c
-        ));
-        alert("Error executing query: " + data.error);
-      }
-    } catch (err) {
-      console.error("Error re-executing chart:", err);
-      setSavedCharts(prev => prev.map(c => 
-        c.id === chartId ? { ...c, isExecuting: false } : c
-      ));
-    }
-  };
-
-  const removeSavedQuery = (queryId: string) => {
-    setSavedQueries(prev => prev.filter(q => q.id !== queryId));
-  };
-
-  const removeSavedChart = (chartId: string) => {
-    setSavedCharts(prev => prev.filter(c => c.id !== chartId));
-  };
-
   return (
     <div className="min-h-screen">
       <div className="p-6">
@@ -844,127 +1023,29 @@ export default function DashboardCreator() {
             </select>
           </div>
 
-          {/* Dashboard Section */}
+          {/* Dashboard Section - React Flow Canvas */}
           {(savedQueries.length > 0 || savedCharts.length > 0) && (
-            <div className="mb-8 bg-gradient-to-br from-blue-50 to-purple-50 dark:from-gray-900 dark:to-gray-800 border border-blue-200 dark:border-gray-700 rounded-lg p-6">
-              <h2 className="text-2xl mb-4 font-semibold">Dashboard</h2>
-              
-              {/* Saved Queries Section */}
-              {savedQueries.length > 0 && (
-                <div className="mb-6">
-                  <h3 className="text-lg font-semibold mb-3">Saved Queries</h3>
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    {savedQueries.map(query => (
-                      <div key={query.id} className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg p-4">
-                        <div className="flex items-start justify-between mb-2">
-                          <div className="flex-1">
-                            <h4 className="font-semibold text-sm mb-1">{query.name}</h4>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">{query.userQuestion}</p>
-                          </div>
-                          <button
-                            onClick={() => removeSavedQuery(query.id)}
-                            className="text-red-600 hover:text-red-700 text-xs ml-2"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                        <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto mb-2 max-h-24">
-                          {query.sql}
-                        </pre>
-                        {query.result && (
-                          <div className="mb-2">
-                            <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">
-                              Results: {query.result.rowCount} rows
-                            </p>
-                            <div className="border border-gray-200 dark:border-gray-700 rounded overflow-x-auto max-h-32">
-                              <table className="w-full text-xs">
-                                <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
-                                  <tr>
-                                    {query.result.columns.map((col) => (
-                                      <th key={col} className="px-2 py-1 text-left font-medium whitespace-nowrap">
-                                        {col}
-                                      </th>
-                                    ))}
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                                  {query.result.rows.slice(0, 3).map((row, idx) => (
-                                    <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                                      {query.result!.columns.map((col) => (
-                                        <td key={col} className="px-2 py-1 font-mono whitespace-nowrap">
-                                          {row[col] === null ? (
-                                            <span className="text-gray-400 italic">null</span>
-                                          ) : typeof row[col] === 'object' ? (
-                                            JSON.stringify(row[col])
-                                          ) : (
-                                            String(row[col])
-                                          )}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        )}
-                        <button
-                          onClick={() => reExecuteSavedQuery(query.id)}
-                          disabled={query.isExecuting || !selectedEnv}
-                          className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                        >
-                          {query.isExecuting ? '⏳ Executing...' : '🔄 Re-execute'}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+            <div className="mb-8">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-2xl font-semibold">Dashboard Canvas</h2>
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  💡 Drag to move, resize handles appear when selected
                 </div>
-              )}
-
-              {/* Saved Charts Section */}
-              {savedCharts.length > 0 && (
-                <div>
-                  <h3 className="text-lg font-semibold mb-3">Saved Charts</h3>
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    {savedCharts.map(chart => (
-                      <div key={chart.id} className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg p-4">
-                        <div className="flex items-start justify-between mb-2">
-                          <div className="flex-1">
-                            <h4 className="font-semibold text-sm mb-1">{chart.name}</h4>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">{chart.userQuestion}</p>
-                          </div>
-                          <button
-                            onClick={() => removeSavedChart(chart.id)}
-                            className="text-red-600 hover:text-red-700 text-xs ml-2"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                        {chart.chartConfig && (
-                          <div className="mb-2">
-                            <ChartDisplay config={chart.chartConfig} />
-                          </div>
-                        )}
-                        <details className="mb-2">
-                          <summary className="text-xs text-gray-600 dark:text-gray-400 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
-                            View SQL
-                          </summary>
-                          <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-x-auto mt-1">
-                            {chart.sql}
-                          </pre>
-                        </details>
-                        <button
-                          onClick={() => reExecuteSavedChart(chart.id)}
-                          disabled={chart.isExecuting || !selectedEnv}
-                          className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                        >
-                          {chart.isExecuting ? '⏳ Refreshing...' : '🔄 Refresh Data'}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              </div>
+              <div className="border-2 border-blue-300 dark:border-blue-700 rounded-lg overflow-hidden" style={{ height: '600px' }}>
+                <ReactFlow
+                  nodes={nodes}
+                  edges={edges}
+                  onNodesChange={onNodesChange}
+                  onEdgesChange={onEdgesChange}
+                  nodeTypes={nodeTypes}
+                  fitView
+                  className="bg-gradient-to-br from-blue-50 to-purple-50 dark:from-gray-900 dark:to-gray-800"
+                >
+                  <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
+                  <Controls />
+                </ReactFlow>
+              </div>
             </div>
           )}
 
